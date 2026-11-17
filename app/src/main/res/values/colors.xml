@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="lagoon">#FF19C6C2</color>
+    <color name="ocean">#FF1B6FD1</color>
+    <color name="deep_sea">#FF0B2740</color>
+    <color name="coral">#FFFF6B57</color>
+    <color name="splash_bg">#FF1FA8D8</color>
+</resources>
