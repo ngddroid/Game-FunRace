@@ -7,6 +7,7 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 import kotlin.math.sign
 import kotlin.math.sqrt
 
@@ -19,13 +20,20 @@ class RaceRules(
     var gravity: Float = 22f,
     var stopDecel: Float = 48f,
     var runSpeed: Float = 5.2f,
+    /** The player's top speed over [runSpeed]: a small edge over the bots so a clean run wins. */
+    var playerEdge: Float = PLAYER_EDGE,
     var playerScale: Float = 1f,
     var mirror: Boolean = false,
     var bigHeads: Boolean = false,
-    /** Levels 1..10: rivals never beat a player who keeps going. */
-    var guaranteeWin: Boolean = false,
-    var rivalSpeedCap: Float = 1f,
-)
+) {
+    companion object {
+        /**
+         * 8% over base speed: the best bots run at ~1.01x, so a clean run wins most races while a
+         * hurdle hit still costs the lead (measured: a mid-skill player wins ~60%, podiums ~87%).
+         */
+        const val PLAYER_EDGE = 1.08f
+    }
+}
 
 class Racer(
     val index: Int,
@@ -63,6 +71,10 @@ class Racer(
     var climbBaseS = 0f
     var segIndex = 0
     var lastHitHazard = -1
+    /** Hit by a hurdle: after the knock (and a short dizzy beat) the racer goes back to its checkpoint. */
+    var respawnPending = false
+    /** Seconds before this racer can be shoved over again. */
+    var shoveCooldown = 0f
     // near-miss tracking (player)
     var zoneHaz = -1
     var zoneClear = 99f
@@ -73,6 +85,9 @@ class Racer(
     var aiErr = 0f
     var aiErrHaz = -1
     var aiPatience = 0f
+    /** Furthest point reached, and seconds since it last moved forward (deadlock breaker). */
+    var aiBestS = 0f
+    var aiStall = 0f
     var wasHold = false
     /** Player input: desired lateral position (NaN = not steering) and a queued jump. */
     var steer = Float.NaN
@@ -87,9 +102,13 @@ class Racer(
 const val JUMP_V = 6.6f
 const val JUMP_G = 24f
 const val STEER_SPEED = 6.5f
+/** Seconds a hit racer stays dizzy where it lands before it is sent back to its checkpoint. */
+const val RESPAWN_DIZZY = 0.55f
+/** How long a rival you ran into lies on the ground before getting up. */
+const val SHOVE_STUN = 0.9f
 
 class SimEvent(val type: Type, val racer: Int, val x: Float = 0f, val v: Int = 0) {
-    enum class Type { STEP, KNOCK, BLOCKED, SPLASH, RESPAWN, CHECKPOINT, COIN, FINISH, NICE, PERFECT, TURBO, SHIELD_POP, JUMP, LAND, GRAB, ZIP, SWING, SLIDE, HAZARD, CAUGHT, GUST }
+    enum class Type { STEP, KNOCK, BLOCKED, SPLASH, RESPAWN, CHECKPOINT, COIN, FINISH, NICE, PERFECT, TURBO, SHIELD_POP, JUMP, LAND, GRAB, ZIP, SWING, SLIDE, HAZARD, CAUGHT, GUST, POOF, SHOVE }
 }
 
 /**
@@ -152,6 +171,7 @@ class RaceSim(
             update(r, dt)
             r.wasHold = r.hold
         }
+        playerShoves()
         checkOver()
     }
 
@@ -167,6 +187,7 @@ class RaceSim(
     private fun update(r: Racer, dt: Float) {
         r.modeT += dt
         if (r.invuln > 0f) r.invuln -= dt
+        if (r.shoveCooldown > 0f) r.shoveCooldown -= dt
         if (r.flash > 0f) r.flash = max(0f, r.flash - dt * 3f)
         if (r.squash > 0f) r.squash = max(0f, r.squash - dt * 2.2f)
         if (r.boostTime > 0f) r.boostTime -= dt
@@ -178,11 +199,26 @@ class RaceSim(
             Mode.RUN -> run(r, seg, dt)
             Mode.STUN -> {
                 r.speed = 0f
-                if (r.modeT >= r.stun) { r.mode = Mode.RUN; r.modeT = 0f }
-                applyGround(r, seg, dt, true)
+                if (r.modeT >= r.stun) {
+                    if (r.respawnPending) {
+                        // vanish where we landed, reappear at the last checkpoint (or the start)
+                        events += SimEvent(SimEvent.Type.POOF, r.index, r.s, (r.d * 100f).toInt())
+                        respawn(r)
+                        return
+                    }
+                    r.mode = Mode.RUN; r.modeT = 0f
+                }
+                if (r.mode == Mode.STUN) applyGround(r, seg, dt, true)
             }
             Mode.AIR -> air(r, seg, dt)
-            Mode.TUMBLE -> tumble(r, dt)
+            Mode.TUMBLE -> {
+                tumble(r, dt)
+                // safety net: never stay airborne-tumbling for long after a hit
+                if (r.mode == Mode.TUMBLE && r.respawnPending && r.modeT > 1.8f) {
+                    events += SimEvent(SimEvent.Type.POOF, r.index, r.s, (r.d * 100f).toInt())
+                    respawn(r)
+                }
+            }
             Mode.FALL -> fall(r, dt)
             Mode.SPLASHED -> if (r.modeT > 1.05f) respawn(r)
             Mode.CLIMB -> climb(r, seg, dt)
@@ -227,14 +263,9 @@ class RaceSim(
 
     fun maxSpeed(r: Racer, seg: Segment): Float {
         var v = rules.runSpeed
-        if (!r.isPlayer) {
-            v *= (0.86f + 0.14f * r.skill) * rules.rivalSpeedCap
-            if (rules.guaranteeWin && !player.finished) {
-                val lead = r.s - player.s
-                if (lead > -1.5f) v *= 0.55f
-                if (r.s > course.finishS - 5f) v = 0f
-            }
-        }
+        // rivals race for real (0.94x .. 1.01x base by skill) and time hurdles well; the player runs
+        // a little faster (PLAYER_EDGE) so a clean run wins, while every hurdle hit still costs time
+        if (r.isPlayer) v *= rules.playerEdge else v *= 0.94f + 0.08f * r.skill
         if (seg.kind == SegKind.RAMP) v *= if (course.slopeAt(r.s) > 0f) 0.82f else 1.1f
         if (seg.kind == SegKind.BEAM) v *= 0.85f
         if (r.turboTime > 0f) v *= 1.38f
@@ -268,17 +299,16 @@ class RaceSim(
         val prevS = r.s
         var ns = r.s + r.speed * dt
         // hazard conveyors (lazy river, raft carry)
-        var conv = 0f
-        if (!air) forHazards(r.s - 0.5f, r.s + 0.5f) { h -> conv += h.conveyor(time, r.s - h.s0, r.d) }
+        var conv = if (air) 0f else beltSpeed(belts, time, r.s, r.d)
         // storm headwind pushes everyone back a little
         storm?.let { st -> conv -= st.gust(time) * st.strength }
         ns += conv * dt
         // blocks: don't walk into solid things
         var blocked = false
         forHazards(ns - 1f, ns + 1f) { h ->
-            if (!blocked && h.danger(time, ns - h.s0, r.d, r.y, hit) == Danger.BLOCK) {
+            if (!blocked && Danger.solid(h.danger(time, ns - h.s0, r.d, r.y, hit))) {
                 blocked = true
-                if (h.danger(time, prevS - h.s0, r.d, r.y, null) == Danger.BLOCK) {
+                if (Danger.solid(h.danger(time, prevS - h.s0, r.d, r.y, null))) {
                     // already inside (door closed on us): get pushed out
                     ns = prevS + hit.vs * dt
                     r.d += hit.vd * dt
@@ -343,6 +373,38 @@ class RaceSim(
         if (r.isPlayer) trackNearMiss(r, inZone)
     }
 
+    /**
+     * Running into a rival knocks them over: they tumble away from you, lie down for a moment and
+     * get back up (no respawn, unless the shove sends them off the deck into the water).
+     */
+    private fun playerShoves() {
+        val p = player
+        if (p.mode != Mode.RUN || p.y > 0.3f || p.speed < 1.2f) return
+        val reach = 2f * RR * 0.9f
+        for (r in racers) {
+            if (r === p || r.finished || r.shoveCooldown > 0f) continue
+            if ((r.mode != Mode.RUN && r.mode != Mode.STUN) || r.y > 0.3f) continue
+            val ds = r.s - p.s
+            val dd = r.d - p.d
+            val dist2 = ds * ds + dd * dd
+            if (dist2 > reach * reach) continue
+            val len = sqrt(dist2).coerceAtLeast(0.05f)
+            val us = if (dist2 < 1e-4f) 1f else ds / len
+            val ud = if (dist2 < 1e-4f) (if (r.index % 2 == 0) 1f else -1f) else dd / len
+            r.mode = Mode.TUMBLE; r.modeT = 0f
+            r.vs = r.speed * 0.3f + us * 3f + 1f
+            r.vd = ud * 4.5f
+            r.vy = 4f
+            r.speed = 0f
+            r.stun = SHOVE_STUN
+            r.squash = 0.6f
+            r.flash = 1f
+            r.shoveCooldown = 1.6f
+            p.speed *= 0.85f
+            events += SimEvent(SimEvent.Type.SHOVE, r.index, 0f, p.index)
+        }
+    }
+
     fun applyHit(r: Racer, kind: Int, hazId: Int) {
         r.lastHitHazard = hazId
         if (r.isPlayer) { r.zoneHit = true; playerTookHit = true }
@@ -355,11 +417,18 @@ class RaceSim(
         }
         r.bonks++
         r.flash = 1f
+        r.respawnPending = true
         if (kind == Danger.FALL) {
             r.mode = Mode.FALL; r.modeT = 0f; r.vy = 0.5f; r.vd = hit.vd * 0.3f; r.vs = r.speed * 0.4f
+            // start the fall from the moving floor's surface (where the racer is drawn), not y = 0
+            tiltUnder(r.s, r.d)?.let { t -> r.y = max(r.y, SetPieceGeometry.tiltSurface(t, time, r.d.coerceIn(-t.hw, t.hw))) }
+            for ((h, hole) in holes) if (h is Trapdoor && r.s > hole[0] && r.s < hole[1] && r.y <= 0.01f) {
+                r.y = min(r.y, SetPieceGeometry.tileSurface(h, time, r.s - h.s0, r.d)); r.vy = 0f
+            }
         } else {
             r.mode = Mode.TUMBLE; r.modeT = 0f
-            r.vs = hit.vs; r.vd = hit.vd; r.vy = hit.vy; r.stun = hit.stun
+            r.vs = hit.vs; r.vd = hit.vd; r.vy = hit.vy
+            r.stun = RESPAWN_DIZZY
             if (hit.squash) r.squash = 1f
         }
         events += SimEvent(SimEvent.Type.KNOCK, r.index, 0f, hazId)
@@ -372,7 +441,7 @@ class RaceSim(
             val a = r.s - h.s0
             var dtOff = 0.05f
             while (dtOff <= 0.6f && dtOff < r.zoneClear) {
-                if (h.danger(time + dtOff, a, r.d, r.y, null) >= Danger.KNOCK || h.danger(time - dtOff, a, r.d, r.y, null) >= Danger.KNOCK) {
+                if (Danger.hurts(h.danger(time + dtOff, a, r.d, r.y, null)) || Danger.hurts(h.danger(time - dtOff, a, r.d, r.y, null))) {
                     r.zoneClear = dtOff; break
                 }
                 dtOff += 0.05f
@@ -403,6 +472,10 @@ class RaceSim(
             if (if (side < 0f) seg.railL else seg.railR) { r.d = side * (hw - 0.3f); r.vd = -r.vd * 0.35f }
         }
         if (r.y <= 0f && r.vy < 0f) {
+            if (seg.kind.hasDeck && abs(r.d) > hw + 0.05f && abs(r.d) < hw + SetPieceGeometry.BODY_R) {
+                // came down on the deck's edge: slip off it, never sink into its side
+                r.d = sign(r.d) * (hw + SetPieceGeometry.BODY_R)
+            }
             if (seg.kind.hasDeck && abs(r.d) <= hw + 0.05f) {
                 r.y = 0f; r.mode = Mode.STUN; r.modeT = 0f; r.speed = 0f
                 if (r.stun <= 0f) r.stun = 0.5f
@@ -417,15 +490,83 @@ class RaceSim(
     private val wtmp = FloatArray(3)
 
     private fun fall(r: Racer, dt: Float) {
+        val ps = r.s; val pd = r.d
         r.s += r.vs * dt; r.d += r.vd * dt; r.y += r.vy * dt
         r.vy -= rules.gravity * dt
         r.vs *= 1f - min(1f, dt * 1.5f)
+        // a tipping deck carries whoever is on it: ride its surface and slide off the low edge
+        val tilt = tiltUnder(r.s, r.d)
+        if (tilt != null) {
+            val roll = tilt.roll(time)
+            val surf = SetPieceGeometry.tiltSurface(tilt, time, r.d.coerceIn(-tilt.hw, tilt.hw))
+            if (r.y <= surf) {
+                r.y = surf
+                if (r.vy < 0f) r.vy = 0f
+                r.vd += sin(roll) * rules.gravity * dt
+                r.vs *= 1f - min(1f, dt * 4f)
+                if (abs(r.d) > tilt.hw - 0.05f) {
+                    // resting on the very edge: slip off it rather than stand half over the water
+                    r.vd = sign(r.d) * max(abs(r.vd), 1.5f)
+                } else if (abs(roll) < 0.1f && r.modeT > 0.3f) {
+                    // the deck levelled out under us: we're lying on it, so get up (and respawn)
+                    r.y = 0f; r.vs = 0f; r.vd = 0f; r.vy = 0f
+                    r.mode = Mode.STUN; r.modeT = 0f
+                    if (r.stun <= 0f) r.stun = 0.4f
+                    return
+                }
+            }
+        }
+        // never fall into solid floor (the deck past a hole, a closed flip tile)
+        if (inFloor(r.s, r.d, r.y)) {
+            when {
+                !inFloor(ps, r.d, r.y) -> { r.s = ps; r.vs = 0f }
+                !inFloor(r.s, pd, r.y) -> { r.d = pd; r.vd = 0f }
+                !inFloor(ps, pd, r.y) -> { r.s = ps; r.d = pd; r.vs = 0f; r.vd = 0f }
+                else -> {
+                    // the floor closed around us (a flip tile shutting): vanish in a puff and respawn
+                    events += SimEvent(SimEvent.Type.POOF, r.index, r.s, (r.d * 100f).toInt())
+                    respawn(r)
+                    return
+                }
+            }
+        }
         course.world(r.s, r.d, r.y, wtmp)
         if (wtmp[1] < Course.WATER_Y + 0.2f) {
             r.mode = Mode.SPLASHED; r.modeT = 0f
             r.splashes++
             events += SimEvent(SimEvent.Type.SPLASH, r.index)
         }
+    }
+
+    /** Lazy-river belts (a racer rides the strongest one under them). */
+    val belts: List<Hazard> = hazards.filter { it.type == HazType.CONVEYOR }
+
+    private val holes: List<Pair<Hazard, FloatArray>> = hazards.mapNotNull { h -> SetPieceGeometry.deckHole(h)?.let { h to it } }
+
+    /** The tilting deck under (s, d), if any. */
+    private fun tiltUnder(s: Float, d: Float): Tilt? {
+        for ((h, hole) in holes) if (h is Tilt && s > hole[0] && s < hole[1] && abs(d) < h.hw + SetPieceGeometry.BODY_R) return h
+        return null
+    }
+
+    /**
+     * Whether a falling body at (s, d, y) overlaps solid floor: a deck slab, or a flip tile that is
+     * (nearly) shut. Tilting decks are handled by [fall] itself.
+     */
+    private fun inFloor(s: Float, d: Float, y: Float): Boolean {
+        if (y >= -0.05f) return false
+        val seg = course.segmentAt(s)
+        val hw = seg.halfWidth
+        if (abs(d) >= hw + SetPieceGeometry.BODY_R) return false
+        for ((h, hole) in holes) if (s > hole[0] && s < hole[1]) {
+            if (h is Trapdoor) {
+                val a = s - h.s0
+                return h.open(time, if (a < 0f) 0 else 1, if (d < 0f) 0 else 1) < 0.35f && y + SetPieceGeometry.BODY_H > -0.3f
+            }
+            return false
+        }
+        if (!seg.kind.hasDeck || seg.kind == SegKind.SLIDE) return false
+        return y + SetPieceGeometry.BODY_H > -SetPieceGeometry.DECK_DEPTH
     }
 
     fun respawn(r: Racer) {
@@ -435,9 +576,18 @@ class RaceSim(
         r.s = safeSpot(cs)
         r.d = r.laneD; r.y = 0f; r.vs = 0f; r.vd = 0f; r.vy = 0f; r.speed = 0f
         r.mode = Mode.RUN; r.modeT = 0f
-        r.invuln = 1.3f
+        r.respawnPending = false
+        r.stun = 0f
+        // just long enough not to be hit again on the spot; never long enough to run through the
+        // next hurdle untouched
+        r.invuln = 0.5f
         r.segIndex = course.segmentAt(r.s).index
         r.zoneHaz = -1
+        // a fresh attempt: re-roll the AI's timing error and recklessness for this hurdle (otherwise
+        // a bot that decided to rush it would rush it, and fail, forever)
+        r.aiErrHaz = -1
+        r.aiPatience = 0f
+        r.aiBestS = r.s; r.aiStall = 0f
         events += SimEvent(SimEvent.Type.RESPAWN, r.index)
     }
 
@@ -489,7 +639,12 @@ class RaceSim(
         r.speed = speed
         r.s += speed * dt
         r.animPhase += speed * dt * 3.2f
-        r.d = moveTowards(r.d, r.laneD.coerceIn(-seg.halfWidth + 0.4f, seg.halfWidth - 0.4f), 0.8f * dt)
+        val lim = seg.halfWidth - 0.4f
+        if (r.isPlayer && !r.steer.isNaN()) {
+            // slide along the wall to dodge falling coconuts
+            r.d = moveTowards(r.d, r.steer.coerceIn(-lim, lim), STEER_SPEED * 0.6f * dt)
+            r.laneD = r.d
+        } else r.d = moveTowards(r.d, r.laneD.coerceIn(-lim, lim), 0.8f * dt)
         if (speed > 0f && ((r.animPhase - speed * dt * 3.2f) / Math.PI).toInt() != (r.animPhase / Math.PI).toInt()) events += SimEvent(SimEvent.Type.GRAB, r.index)
         // coconuts
         if (r.invuln <= 0f) {
@@ -501,7 +656,8 @@ class RaceSim(
                     // drop back to the wall base
                     r.bonks++; r.flash = 1f
                     if (r.isPlayer) { playerTookHit = true; r.zoneHit = true }
-                    r.y = h; r.s = seg.s0 - 0.7f; r.vs = -1.5f; r.vd = 0f; r.vy = 0f; r.stun = 0.9f
+                    r.y = h; r.s = seg.s0 - 0.7f; r.vs = -1.5f; r.vd = 0f; r.vy = 0f; r.stun = RESPAWN_DIZZY
+                    r.respawnPending = true
                     r.mode = Mode.TUMBLE; r.modeT = 0f
                     events += SimEvent(SimEvent.Type.KNOCK, r.index, 0f, hz.id)
                     return
@@ -530,6 +686,8 @@ class RaceSim(
         r.speed = min(10.5f, r.speed + 9f * dt)
         r.s += r.speed * dt
         r.y = 0.6f
+        // grab the nearest of the three cables
+        r.d = moveTowards(r.d, SetPieceGeometry.nearestCable(seg.halfWidth, r.d), 5f * dt)
         r.animPhase += dt
         if (r.s >= seg.s1) land(r)
     }
@@ -563,7 +721,9 @@ class RaceSim(
                 // bumpers keep riders aboard unless docked at that end
                 if (ns > front && !raftH.docked(time, false)) { ns = front; r.speed = 0f }
                 if (ns < back && !raftH.docked(time, true)) ns = back
-            } else if (r.s > seg.s0 + 0.12f && r.s < seg.s1 - 0.12f) {
+            } else if (max(r.s, ns) > seg.s0 + 0.12f && r.s < seg.s1 - 0.12f) {
+                // stepped off the dock with no raft there: into the water at once (never walk on it)
+                r.s = max(r.s, min(ns, seg.s0 + 0.2f))
                 r.mode = Mode.FALL; r.modeT = 0f; r.vs = r.speed * 0.5f; r.vy = 0.5f
                 if (r.isPlayer) playerTookHit = true
                 return
@@ -578,12 +738,13 @@ class RaceSim(
         val slope = course.slopeAt(r.s)
         r.speed = clamp(r.speed + (-slope * 14f - 0.6f) * dt, 5.5f, 11.5f)
         r.s += r.speed * dt
-        r.y = 0f
         // bank toward the outside of bends
         val yawRate = (course.yawAt(r.s + 1f) - course.yawAt(r.s - 1f)) / 2f
         r.d = moveTowards(r.d, clamp(-yawRate * 9f + r.laneD * 0.3f, -seg.halfWidth + 0.4f, seg.halfWidth - 0.4f), 3f * dt)
+        // feet ride on the curved channel surface (higher up the side in bends)
+        r.y = SetPieceGeometry.slideSurface(seg.halfWidth, r.d)
         r.animPhase += dt
-        if (r.s >= seg.s1) { r.mode = Mode.RUN; r.modeT = 0f; r.speed = 5f }
+        if (r.s >= seg.s1) { r.mode = Mode.RUN; r.modeT = 0f; r.speed = 5f; r.y = 0f }
     }
 
     private fun finish(r: Racer) {

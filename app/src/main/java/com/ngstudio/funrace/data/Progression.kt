@@ -3,6 +3,8 @@ package com.ngstudio.funrace.data
 import com.ngstudio.funrace.game.RaceResult
 import com.ngstudio.funrace.game.sim.RaceKind
 import com.ngstudio.funrace.level.LevelRepository
+import com.ngstudio.funrace.services.GameEvents
+import com.ngstudio.funrace.services.Telemetry
 
 /** What a race paid out (shown on the result screen). */
 class Payout(
@@ -86,7 +88,11 @@ object Progression {
             payout = Payout(stars, prev, coins, trophies, cleared, unlocked, milestone, newItems, medal)
             d
         }
-        return payout!!
+        val p = payout!!
+        p.milestone?.forEach { GameEvents.reward("milestone", it) }
+        if (dailyChallenge && p.cleared) Telemetry.event("daily_challenge_cleared", "rank" to r.rank)
+        if (p.medal > 0) Telemetry.event("time_trial_medal", "level" to r.level, "medal" to p.medal)
+        return p
     }
 
     /** Grants a reward into the save. Duplicate items convert to gems. */
@@ -119,6 +125,7 @@ object Progression {
             got = r
             grant(d, r).let { it.copy(daily = it.daily.copy(loginIndex = (idx + 1) % 7, loginLastDay = today)) }
         }
+        got?.let { GameEvents.reward("calendar", it) }
         return got
     }
 
@@ -132,6 +139,7 @@ object Progression {
                 daily = d.daily.copy(missions = d.daily.missions.map { if (it.id == id) it.copy(claimed = true) else it }),
             )
         }
+        GameEvents.earn(GameEvents.COINS, coins, "mission")
         return coins
     }
 
@@ -144,6 +152,7 @@ object Progression {
             gems = GameRules.achievementReward(claimed)
             d.copy(wallet = d.wallet.copy(gems = d.wallet.gems + gems), achievements = d.achievements + (id to claimed + 1))
         }
+        if (gems > 0) { GameEvents.achievement(id, repo.data.achievements[id] ?: 0); GameEvents.earn(GameEvents.GEMS, gems, "achievement") }
         return gems
     }
 
@@ -156,6 +165,7 @@ object Progression {
             got = step.reward
             grant(d, step.reward).let { it.copy(progress = it.progress.copy(trophyRoadClaimed = i + 1)) }
         }
+        got?.let { GameEvents.reward("trophy_road", it) }
         return got
     }
 
@@ -168,6 +178,7 @@ object Progression {
             val nd = grant(d, GameRules.wheel[slot].reward)
             nd.copy(daily = nd.daily.copy(wheelFreeUsed = true, wheelAdSpins = nd.daily.wheelAdSpins + if (viaAd) 1 else 0))
         }
+        if (slot >= 0) GameEvents.reward(if (viaAd) "wheel_ad" else "wheel", GameRules.wheel[slot].reward)
         return slot
     }
 
@@ -184,6 +195,7 @@ object Progression {
                 collection = d.collection.copy(owned = d.collection.owned + key),
             )
         }
+        if (ok) GameEvents.spend(if (gems) GameEvents.GEMS else GameEvents.COINS, price, key)
         return ok
     }
 
@@ -195,6 +207,7 @@ object Progression {
             ok = true
             d.copy(wallet = d.wallet.copy(coins = d.wallet.coins - def.price), progress = d.progress.copy(boosters = d.progress.boosters + (id to ((d.progress.boosters[id] ?: 0) + 1))))
         }
+        if (ok) GameEvents.spend(GameEvents.COINS, def.price, "booster:$id")
         return ok
     }
 
@@ -224,5 +237,6 @@ object Progression {
     /** Debug/ad unlock of a single level out of order. */
     fun unlockLevel(repo: SaveRepository, level: Int) {
         repo.update { d -> d.copy(progress = d.progress.copy(extraUnlocked = d.progress.extraUnlocked + level)) }
+        Telemetry.event("level_unlock_ad", "level" to level)
     }
 }

@@ -11,6 +11,7 @@ import java.util.concurrent.Future
  * first salt whose level passes every check). Full run: -DfullLevelValidation=true.
  */
 class LevelValidationTest {
+
     @Test
     fun validateLevels() {
         val full = System.getProperty("fullLevelValidation") == "true"
@@ -21,7 +22,8 @@ class LevelValidationTest {
         for (n in levels) {
             futures += n to pool.submit<Pair<Int, String>> {
                 if (n <= 10) {
-                    val rep = LevelValidator.check(Handcrafted.get(n), true, 0.5f)
+                    // rivals race for real, so a decent (not perfect) player must still usually reach the podium
+                    val rep = LevelValidator.checkTutorial(Handcrafted.get(n))
                     return@submit (if (rep.ok) 0 else -1) to rep.problems.joinToString()
                 }
                 var last = ""

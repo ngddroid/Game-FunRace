@@ -10,11 +10,11 @@ object Names {
         "Mochi", "Yuki", "Nacho", "Pudding", "Rocket", "Lolli", "Flip", "Splashy", "Hula", "Banjo", "Cleo", "Pogo",
     )
 
+    /** Rival [i] of a race: one starting point per race, then a fixed stride, so names never repeat in a race. */
     fun rival(seed: Long, i: Int): String {
-        val h = hash2(seed.toInt() xor (seed ushr 32).toInt(), i * 7919 + 13)
-        // avoid duplicates inside one race by striding
+        val h = hash2(seed.toInt() xor (seed ushr 32).toInt(), 7919)
         val base = (h and 0x7FFFFFFF) % rivals.size
-        return rivals[(base + i * 7) % rivals.size]
+        return rivals[(base + i * 7) % rivals.size]   // 7 and the list size share no factor
     }
 
     private val first = mapOf(

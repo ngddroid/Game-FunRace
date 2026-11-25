@@ -6,6 +6,7 @@ import com.ngstudio.funrace.game.sim.Hazard
 import com.ngstudio.funrace.game.sim.RaceKind
 import com.ngstudio.funrace.game.sim.RaceRules
 import com.ngstudio.funrace.game.sim.SegKind
+import com.ngstudio.funrace.game.sim.beltSpeed
 import kotlin.math.max
 import kotlin.math.min
 
@@ -14,7 +15,8 @@ import kotlin.math.min
  * levels) and by the debug menu.
  */
 object LevelValidator {
-    const val RUN_SPEED = 5.2f
+    /** The player's top speed: safe windows are measured for the racer who has to find them. */
+    const val RUN_SPEED = 5.2f * RaceRules.PLAYER_EDGE
     private const val DT = 1f / 60f
 
     /**
@@ -22,7 +24,7 @@ object LevelValidator {
      * racer at [laneD] running flat out gets through every hazard untouched.
      */
     fun groupWindow(specs: List<HazSpec>, hw: Float, laneD: Float): Float {
-        val hz = specs.mapNotNull { LevelBuilder.makeHazard(it, 0f, hw) }
+        val hz = LevelBuilder.mergeBelts(specs.mapNotNull { LevelBuilder.makeHazard(it, 0f, hw) })
         val lethal = hz.filter { it.type != HazType.CONVEYOR }
         if (lethal.isEmpty()) return 99f
         return window(hz, laneD)
@@ -51,18 +53,48 @@ object LevelValidator {
             for (h in hz) {
                 if (s < h.zoneStart - 0.4f || s > h.zoneEnd + 0.4f) continue
                 val k = h.danger(t0 + t, s - h.s0, d, 0f, null)
-                if (k != Danger.SAFE) return false
+                if (k != Danger.SAFE && k != Danger.BUMP) return false
             }
             v = min(RUN_SPEED, v + 24f * DT)
-            var conv = 0f
-            for (h in hz) conv += h.conveyor(t0 + t, s - h.s0, d)
+            val conv = beltSpeed(hz, t0 + t, s, d)
             s += (v + conv) * DT
             t += DT
         }
         return true
     }
 
+    /** A slow, error-prone player (who can still jump) must be able to get through the whole course. */
+    const val CASUAL_SKILL = 0.45f
+    const val CASUAL_LIMIT_S = 240f
+
+    /** Why a casual player can't finish [spec] (keeps racing after the podium fills), or null. */
+    fun casualStuck(spec: LevelSpec): String? {
+        val setup = LevelBuilder.build(spec)
+        val sim = LevelBuilder.createSim(setup, RaceRules())
+        sim.autopilot = true
+        sim.player.skill = CASUAL_SKILL
+        sim.started = true
+        var steps = 0
+        val limit = (CASUAL_LIMIT_S / DT).toInt()
+        while (!sim.player.finished && steps < limit) { sim.step(DT); steps++ }
+        if (sim.player.finished) return null
+        val p = sim.player
+        val near = setup.hazards.filter { kotlin.math.abs(it.s0 - p.s) < 8f }.joinToString { it.type.name }
+        return "a casual player is stuck after %.0f s at s=%.0f of %.0f (%s, %d hits)".format(CASUAL_LIMIT_S, p.s, setup.course.finishS, near, p.bonks)
+    }
+
     class Report(val level: Int, val ok: Boolean, val problems: List<String>, val rank: Int = 0, val time: Float = 0f)
+
+    /** Autopilot skills a tutorial level is raced at; a decent player must podium in at least 2 of 3. */
+    val TUTORIAL_SKILLS = floatArrayOf(0.7f, 0.75f, 0.8f)
+
+    /** Tutorial check: rivals race for real, so one unlucky run may miss the podium, but most must not. */
+    fun checkTutorial(spec: LevelSpec): Report {
+        val reps = TUTORIAL_SKILLS.map { check(spec, true, it) }
+        val ok = reps.count { it.ok } >= 2
+        val best = reps.minBy { it.rank }
+        return Report(spec.level, ok, if (ok) emptyList() else reps.flatMap { it.problems }.distinct(), best.rank, best.time)
+    }
 
     /** Static checks: geometry, checkpoints, safe pads and safe windows for every hazard group. */
     fun check(spec: LevelSpec, withAutopilot: Boolean, autopilotSkill: Float = 0.85f): Report {
@@ -107,9 +139,11 @@ object LevelValidator {
             rank = if (sim.player.finished) sim.player.rank else 99
             time = sim.time
             val need = if (spec.kind == RaceKind.BONUS) 1 else 3
-            if (rank > need) problems += "autopilot finished #$rank"
-            if (!sim.player.finished) problems += "autopilot did not finish in 300 s (stuck at s=%.1f mode=%s seg=%s)".format(sim.player.s, sim.player.mode, c.segmentAt(sim.player.s).kind)
+            if (!sim.player.finished && sim.over) problems += "rivals took the podium before the autopilot finished (at s=%.1f of %.1f)".format(sim.player.s, c.finishS)
+            else if (!sim.player.finished) problems += "autopilot did not finish in 300 s (stuck at s=%.1f mode=%s seg=%s)".format(sim.player.s, sim.player.mode, c.segmentAt(sim.player.s).kind)
+            else if (rank > need) problems += "autopilot finished #$rank"
         }
+        if (withAutopilot && problems.isEmpty()) casualStuck(spec)?.let { problems += it }
         return Report(spec.level, problems.isEmpty(), problems, rank, time)
     }
 }

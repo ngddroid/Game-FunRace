@@ -20,6 +20,9 @@ import com.ngstudio.funrace.game.sim.Mode
 import com.ngstudio.funrace.game.sim.RaceKind
 import com.ngstudio.funrace.game.sim.Racer
 import com.ngstudio.funrace.game.sim.SegKind
+import com.ngstudio.funrace.game.sim.SetPieceGeometry
+import com.ngstudio.funrace.game.sim.Tilt
+import com.ngstudio.funrace.game.sim.Trapdoor
 import com.ngstudio.funrace.game.sim.SetPieceMath
 import com.ngstudio.funrace.game.sim.SimEvent
 import com.ngstudio.funrace.level.TimeOfDay
@@ -114,24 +117,64 @@ class RaceScene(
         }
     }
 
+    /**
+     * Danger-zone decals: a soft solid fill with a crisp border. Each zone is meshed as rows across
+     * the track; every vertex stores how far inside the zone it is (0 on the edge, 1 at 0.2 m+) so
+     * the shader can draw the border ring. Disc zones (sweepers, spin bars) are clipped per row.
+     */
     private fun buildDecals(): Mesh? {
-        val md = MeshData(512, 1024)
+        val md = MeshData(1024, 2048)
+        val edgeW = 0.2f
+        val cols = FloatArray(6)
         for (h in setup.hazards) {
             if (h.id >= 48) continue
             val seg = course.segmentAt(h.s0)
             if (!seg.kind.hasDeckVisual()) continue
+            val trackHw = seg.halfWidth
             for (z in h.zones()) {
-                val a0 = h.s0 + z.a0; val a1 = h.s0 + z.a1
-                val n = max(1, ((a1 - a0) / 0.5f).toInt())
-                val base = md.vCount
-                for (i in 0..n) {
-                    val s = a0 + (a1 - a0) * i / n
-                    course.world(s, z.d0, 0.07f, p); md.v(p[0], p[1], p[2], 0f, 1f, 0f, world.danger, 0.5f, h.id)
-                    course.world(s, z.d1, 0.07f, p); md.v(p[0], p[1], p[2], 0f, 1f, 0f, world.danger, 0.5f, h.id)
+                val zd0 = max(z.d0, -trackHw); val zd1 = min(z.d1, trackHw)
+                if (zd1 - zd0 < 0.05f) continue
+                fun inside(a: Float, d: Float): Float {
+                    var e = min(min(a - z.a0, z.a1 - a), min(d - zd0, zd1 - d))
+                    if (z.r > 0f) e = min(e, z.r - sqrt(a * a + (d - z.cd) * (d - z.cd)))
+                    return (e / edgeW).coerceIn(0f, 1f)
                 }
-                for (i in 0 until n) {
-                    val a = base + i * 2
-                    md.tri(a, a + 3, a + 2); md.tri(a, a + 1, a + 3)
+                fun row(a: Float, out: FloatArray): Int {
+                    var lo = zd0; var hi = zd1
+                    if (z.r > 0f) {
+                        val k = z.r * z.r - a * a
+                        if (k <= 0f) return 0
+                        val c = sqrt(k)
+                        lo = max(lo, z.cd - c); hi = min(hi, z.cd + c)
+                    }
+                    if (hi - lo < 0.02f) return 0
+                    val e = min(edgeW, (hi - lo) / 2f)
+                    out[0] = lo; out[1] = lo + e; out[2] = (lo + hi) / 2f; out[3] = hi - e; out[4] = hi
+                    return 5
+                }
+                // rows: dense near the ends so the border stays crisp
+                val rows = ArrayList<Float>()
+                var a = z.a0
+                rows += a
+                while (a < z.a1) {
+                    val step = if (a - z.a0 < edgeW || z.a1 - a < edgeW * 1.5f || z.r > 0f) 0.1f else 0.4f
+                    a = min(z.a1, a + step)
+                    rows += a
+                }
+                var prevBase = -1
+                for (ra in rows) {
+                    val n = row(ra, cols)
+                    if (n == 0) { prevBase = -1; continue }
+                    val base = md.vCount
+                    for (k in 0 until n) {
+                        course.world(h.s0 + ra, cols[k], 0.07f, p)
+                        val edge = if (ra == z.a0 || ra == z.a1) 0f else inside(ra, cols[k])
+                        md.v(p[0], p[1], p[2], 0f, 1f, 0f, world.danger, 1f, h.id or ((edge * 255f).toInt() shl 8))
+                    }
+                    if (prevBase >= 0) for (k in 0 until n - 1) {
+                        md.tri(prevBase + k, base + k + 1, base + k); md.tri(prevBase + k, prevBase + k + 1, base + k + 1)
+                    }
+                    prevBase = base
                 }
             }
         }
@@ -169,6 +212,10 @@ class RaceScene(
                     hazHit[e.v] = 1f
                     if (r?.isPlayer == true && !controller.reducedMotion) shake = 0.6f
                 }
+                SimEvent.Type.SHOVE -> if (v != null) {
+                    burst(v.wx, v.wy + 0.9f, v.wz, 0xFFFFE36B.toInt(), ParticleAtlas.STAR, 8, 4f, 0.5f)
+                    burst(v.wx, v.wy + 0.6f, v.wz, 0xDDFFFFFF.toInt(), ParticleAtlas.PUFF, 4, 2f, 0.6f)
+                }
                 SimEvent.Type.SPLASH -> if (r != null) {
                     course.world(r.s, r.d, 0f, p)
                     val x = p[0]; val z = p[2]
@@ -198,6 +245,19 @@ class RaceScene(
                     }
                 }
                 SimEvent.Type.CAUGHT -> if (r != null) { course.world(r.s, r.d, 0f, p); splash(p[0], p[2], 1.4f) }
+                SimEvent.Type.POOF -> if (r != null) {
+                    // vanish puff where the bonked racer landed
+                    course.world(e.x, e.v / 100f, 0.5f, p)
+                    burst(p[0], p[1], p[2], 0xEEFFFFFF.toInt(), ParticleAtlas.PUFF, 10, 2.6f, 0.9f)
+                    burst(p[0], p[1] + 0.4f, p[2], 0xFFFFE36B.toInt(), ParticleAtlas.STAR, 5, 3f, 0.4f)
+                }
+                SimEvent.Type.RESPAWN -> if (r != null) {
+                    // reappear at the checkpoint; the camera cuts there instead of flying back
+                    course.world(r.s, r.d, 0.4f, p)
+                    burst(p[0], p[1], p[2], 0xEEFFFFFF.toInt(), ParticleAtlas.PUFF, 8, 2.2f, 0.8f)
+                    burst(p[0], p[1] + 0.6f, p[2], 0xFFFFD23F.toInt(), ParticleAtlas.SPARKLE, 6, 2.5f, 0.35f, additive = true)
+                    if (r.isPlayer) camInit = false
+                }
                 SimEvent.Type.GUST -> flash = 1f
                 SimEvent.Type.STEP -> if (v != null && r!!.isPlayer && r.speed > 3f) burst(v.wx, v.wy + 0.05f, v.wz, 0x99FFFFFF.toInt(), ParticleAtlas.PUFF, 1, 0.6f, 0.35f, life = 0.35f)
                 else -> Unit
@@ -298,6 +358,9 @@ class RaceScene(
     }
 
     // ------------------------------------------------------------------------------------ animation
+    /** Tilting decks and flip tiles: racers standing on them are drawn on their moving top. */
+    private val movingFloors = controller.sim.hazards.filter { it is Tilt || it is Trapdoor }
+
     private fun animate(v: RacerVis, dt: Float, simT: Float) {
         val r = v.racer
         val sim = controller.sim
@@ -307,6 +370,12 @@ class RaceScene(
         val mode = r.mode
         var h = r.y
         if (mode == Mode.MONKEY) h = 0.55f
+        // feet follow a tilting deck while it wobbles before tipping
+        if (mode == Mode.RUN || mode == Mode.STUN) for (fl in movingFloors) {
+            if (r.s <= fl.s0 - fl.reach || r.s >= fl.s0 + fl.reach || abs(r.d) > fl.hw) continue
+            if (fl is Tilt && abs(r.s - fl.s0) < fl.halfLen) { h += SetPieceGeometry.tiltSurface(fl, simT, r.d); break }
+            if (fl is Trapdoor && abs(r.s - fl.s0) < fl.tileLen) { h += SetPieceGeometry.tileSurface(fl, simT, r.s - fl.s0, r.d); break }
+        }
         course.world(r.s, r.d, h, p)
         var yaw = course.yawAt(r.s)
         if (mode == Mode.CLIMB) {
@@ -375,6 +444,7 @@ class RaceScene(
         }
         v.blend = min(1f, v.blend + dt * 7f)
         v.pose.blendTo(tp, if (v.blend >= 1f) 1f else 0.3f + v.blend * 0.5f)
+        if (mode == Mode.ZIP || mode == Mode.MONKEY || mode == Mode.SWING) gripFit(v)
         // whole-body spin while tumbling/falling
         if (mode == Mode.TUMBLE || mode == Mode.FALL) {
             v.spinPitch += dt * (if (r.vs < 0f) -9f else 7f)
@@ -383,6 +453,36 @@ class RaceScene(
             v.spinPitch = damp(v.spinPitch % TAU, 0f, 10f, dt)
             v.spinRoll = damp(v.spinRoll % TAU, 0f, 10f, dt)
         }
+    }
+
+    private val t3 = FloatArray(3)
+
+    /**
+     * Hanging racers: move the body up or down so its hands sit exactly on the zip handle bar, the
+     * monkey bar or the end of the swing rope, whatever the body's proportions or pose.
+     */
+    private fun gripFit(v: RacerVis) {
+        val r = v.racer
+        val grip = when (r.mode) {
+            Mode.ZIP -> { course.world(r.s, r.d, SetPieceGeometry.ZIP_BAR_H, p); p[1] }
+            Mode.MONKEY -> { course.world(r.s, r.d, SetPieceGeometry.MONKEY_BAR_H, p); p[1] }
+            Mode.SWING -> {
+                val seg = course.segmentAt(r.s.coerceAtMost(course.length))
+                if (seg.kind != SegKind.SWING) return
+                val mid = (seg.s0 + seg.s1) / 2f
+                val half = seg.length / 2f
+                val rope = sqrt(half * half + (seg.p0 - 1f) * (seg.p0 - 1f))
+                val ang = asin(((r.s - mid) / rope).coerceIn(-1f, 1f))
+                course.world(mid, r.d, seg.p0, p)
+                p[1] - rope * cos(ang)
+            }
+            else -> return
+        }
+        setModel(v)
+        drawer.computeSkin(v.pose, v.look.body)
+        drawer.boneWorld(Bones.HAND_L, t3); var hand = t3[1]
+        drawer.boneWorld(Bones.HAND_R, t3); hand = max(hand, t3[1])
+        v.wy += grip - (hand + 0.06f)
     }
 
     private fun dangerNear(r: Racer): Boolean {
@@ -419,8 +519,9 @@ class RaceScene(
         var cx: Float; var cy: Float; var cz: Float
         var fov = 55f
         val portrait = cam.aspect < 0.8f
-        val back = if (portrait) 5.6f else 5.0f
-        val up = if (portrait) 5.4f else 4.0f
+        // high, pulled-back chase cam: the runner sits a little below centre with the course ahead in view
+        val back = if (portrait) 7.4f else 6.2f
+        val up = if (portrait) 6.6f else 4.8f
         if (phase == RacePhase.INTRO) {
             val t = smoothstep(0f, 1f, controller.phaseT / controller.introDuration)
             course.world(course.startS + 18f - 16f * t, 0f, 0f, p)
@@ -439,17 +540,18 @@ class RaceScene(
             fov = 50f
         } else {
             var b = back; var u = up
-            var lookAhead = 3f
+            var lookAhead = 2.4f
             when (pl.mode) {
-                Mode.CLIMB -> { b = 6.5f; u = 1.4f; lookAhead = 0.5f }
-                Mode.ZIP, Mode.SWING -> { b = 7.5f; u = 3.6f; lookAhead = 4f; fov = 58f }
-                Mode.AIR -> { b = 7f; u = 4.2f }
-                Mode.SLIDE -> { b = 6.5f; u = 3.2f; fov = 60f }
-                Mode.FALL, Mode.SPLASHED -> { b = 7f; u = 5f }
+                // look up the wall so the coconut baskets above it stay in view while climbing
+                Mode.CLIMB -> { b = 8.0f; u = 0.5f; lookAhead = 0.5f }
+                Mode.ZIP, Mode.SWING -> { b = 8.5f; u = 4.6f; lookAhead = 4f; fov = 58f }
+                Mode.AIR -> { b = 8.2f; u = 6.2f }
+                Mode.SLIDE -> { b = 7.4f; u = 4.2f; fov = 60f }
+                Mode.FALL, Mode.SPLASHED -> { b = 8.4f; u = 6.6f }
                 else -> Unit
             }
             if (pl.turboTime > 0f) fov += 7f
-            tx = pv.wx + fwdX * lookAhead; tz = pv.wz + fwdZ * lookAhead; ty = pv.wy + 0.6f
+            tx = pv.wx + fwdX * lookAhead; tz = pv.wz + fwdZ * lookAhead; ty = pv.wy + if (pl.mode == Mode.CLIMB) 2.6f else 0.6f
             if (pl.mode == Mode.FALL || pl.mode == Mode.SPLASHED) { course.world(pl.checkpoint, 0f, 0f, p); ty = max(p[1], ty) }
             cx = tx - fwdX * (b + lookAhead); cz = tz - fwdZ * (b + lookAhead); cy = ty + u
         }
@@ -495,7 +597,8 @@ class RaceScene(
         val flagB = res.meshes.batch("flag_cloth")
         setup.checkpoints.forEachIndexed { i, cs ->
             if (abs(cs - camS) > 70f) return@forEachIndexed
-            course.world(cs, -course.segmentAt(cs).halfWidth + 0.2f, 0f, p)
+            // pole stands just off the deck edge so it never sits in a runnable lane
+            course.world(cs, -course.segmentAt(cs).halfWidth - 0.12f, 0f, p)
             val reached = pl.checkpointIdx >= i
             Inst.add(flagB, p[0], p[1], p[2], course.yawAt(cs) + sin(time * 2f + i) * 0.15f, tintA = if (reached) controller.playerLook.primary else 0xF4F6FA, sway = 0.6f)
         }
@@ -504,7 +607,7 @@ class RaceScene(
             val r = v.racer
             if (!v.visible) continue
             if (r.mode == Mode.ZIP) {
-                course.world(r.s, 0f, 2.42f, p)
+                course.world(r.s, r.d, SetPieceGeometry.ZIP_CABLE_H, p)
                 Inst.add(res.meshes.batch("zip_handle"), p[0], p[1], p[2], course.yawAt(r.s))
             } else if (r.mode == Mode.SWING) {
                 val seg = course.segmentAt(r.s.coerceAtMost(course.length))
@@ -513,9 +616,10 @@ class RaceScene(
                     val half = seg.length / 2f
                     val rope = sqrt(half * half + (seg.p0 - 1f) * (seg.p0 - 1f))
                     val ang = asin(((r.s - mid) / rope).coerceIn(-1f, 1f))
-                    course.world(mid, r.d * 0.3f, seg.p0, p)
-                    // rope swings along the course: pitch about the lateral axis
-                    Inst.add(res.meshes.batch("rope"), p[0], p[1], p[2], course.yawAt(mid), ang, 0f, 1.6f, rope, 1.6f)
+                    course.world(mid, r.d, seg.p0, p)
+                    // rope swings along the course: its lower end follows the racer (pitch -ang puts
+                    // the end rope*sin(ang) ahead of the beam, exactly where the racer is)
+                    Inst.add(res.meshes.batch("rope"), p[0], p[1], p[2], course.yawAt(mid), -ang, 0f, 1.6f, rope, 1.6f)
                 }
             }
         }
@@ -536,7 +640,7 @@ class RaceScene(
         for (v in vis) {
             if (!v.visible) continue
             setModel(v)
-            drawer.computeSkin(v.pose)
+            drawer.computeSkin(v.pose, v.look.body)
             drawer.queueParts(v.look, v.expr, v.blink, 1f, outline = true)
         }
 
@@ -544,16 +648,18 @@ class RaceScene(
         var shadowDone = false
         if (res.beginShadowPass()) {
             val pv = vis[pl.index]
-            res.shadow.update(rig.sunDir[0], rig.sunDir[1], rig.sunDir[2], pv.wx + sin(course.yawAt(pl.s)) * 7f, pv.wy, pv.wz + cos(course.yawAt(pl.s)) * 7f, 15f)
+            res.shadow.update(rig.sunDir[0], rig.sunDir[1], rig.sunDir[2], pv.wx + sin(course.yawAt(pl.s)) * 9f, pv.wy, pv.wz + cos(course.yawAt(pl.s)) * 9f, 18f)
             res.depth.mat4("uViewProj", res.shadow.lightViewProj)
             res.depth.mat4("uLightVP", res.shadow.lightViewProj)
-            for (c in chunks) {
+            // static track pieces only cast shadows on strong GPUs: with the soft flat light their shadows
+            // barely show, while racers and hurdles (the shadows that matter) always cast
+            if (res.tier == QualityTier.HIGH) for (c in chunks) {
                 val dx = c.cx - pv.wx; val dz = c.cz - pv.wz
                 if (dx * dx + dz * dz < (c.radius + 25f) * (c.radius + 25f)) c.mesh.draw()
             }
             for (bt in res.meshes.allBatches()) bt.draw()
             CharacterPass.beginSkinDepth(res)
-            for (v in vis) { if (!v.visible) continue; setModel(v); drawer.computeSkin(v.pose); drawer.drawBodyDepth(res.skinDepth) }
+            for (v in vis) { if (!v.visible) continue; setModel(v); drawer.computeSkin(v.pose, v.look.body); drawer.drawBodyDepth(res.skinDepth, v.look) }
             res.endShadowPass()
             shadowDone = true
         }
@@ -573,17 +679,11 @@ class RaceScene(
         res.litFade.f("uSwayAll", 0f)
         res.litFade.f("uFadeNear", 4.2f)
         for (bt in res.meshes.allBatches()) bt.draw()
-        // characters (outline then body)
-        CharacterPass.beginSkinOutline(res, cam, rig, waterY)
-        for (v in vis) { if (!v.visible) continue; setModel(v); drawer.computeSkin(v.pose); drawer.drawBody(res.skinOutline, v.look, fadeNear = if (v.racer.isPlayer) 0f else 3.4f) }
-        CharacterPass.endOutline()
-        res.beginOutline(cam, rig, waterY, 0.016f)
-        for (n in charParts) res.meshes.existing(n)?.let { if (it.count > 0) it.draw() }
-        res.endOutline()
+        // characters: clean shading, no ink outlines (crisper, matches the toy-like look)
         CharacterPass.beginSkin(res, cam, rig, waterY)
         for (v in vis) {
             if (!v.visible) continue
-            setModel(v); drawer.computeSkin(v.pose)
+            setModel(v); drawer.computeSkin(v.pose, v.look.body)
             drawer.drawBody(res.skin, v.look, flash = v.racer.flash * 0.5f, fadeNear = if (v.racer.isPlayer) 0f else 3.4f)
         }
 
@@ -648,13 +748,6 @@ class RaceScene(
         res.labelBill.draw()
         GLES30.glDepthMask(true)
         GLES30.glDisable(GLES30.GL_BLEND)
-    }
-
-    private val charParts: Set<String> by lazy {
-        val s = HashSet<String>()
-        for (c in Catalog.characters) for (a in c.accessories) s += a.mesh
-        for (h in Catalog.hats) if (h.mesh.isNotEmpty()) s += h.mesh
-        s
     }
 
     private fun setModel(v: RacerVis) {

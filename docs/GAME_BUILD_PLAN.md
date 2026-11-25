@@ -1,6 +1,6 @@
 # Splash Dash: Single-Phase Build Plan
 
-> Working title: **Splash Dash: Obstacle Party** (rename it when you approve; see §11).
+> Working title: **Splash Dash: Obstacle Party**. Google Play name: **Splash Dash: Obstacle Race 3D** (chosen 2026-11-25, see `store/play/README.md`).
 > Project: `/Volumes/Work/Raj/Android/FunRace` · package `com.ngstudio.funrace` · Kotlin + Jetpack Compose + custom OpenGL ES 3 engine, with assets modelled by Blender scripts.
 > Approving this plan starts one continuous build phase (WP1 → WP13 in §9). Each work package ends in a buildable app, and I check it on your Realme device before moving on.
 

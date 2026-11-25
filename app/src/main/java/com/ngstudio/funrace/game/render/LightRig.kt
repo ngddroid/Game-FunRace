@@ -13,8 +13,8 @@ class LightRig {
     val ambGround = floatArrayOf(0.52f, 0.5f, 0.5f)
     val rim = floatArrayOf(0.55f, 0.7f, 0.95f)
     val fog = floatArrayOf(0.85f, 0.92f, 1f)
-    var fogStart = 70f
-    var fogEnd = 320f
+    var fogStart = 120f
+    var fogEnd = 460f
     val skyTop = floatArrayOf(0.24f, 0.55f, 0.94f)
     val skyHorizon = floatArrayOf(0.75f, 0.9f, 1f)
     val skyGlow = floatArrayOf(1f, 0.85f, 0.6f)
@@ -31,7 +31,7 @@ class LightRig {
     var saturation = 1.1f
     var contrast = 1.04f
     var brightness = 1.0f
-    var vignette = 0.3f
+    var vignette = 0f
     val gradeTint = floatArrayOf(1f, 1f, 1f)
     var lanternGlow = 0f
 
@@ -51,27 +51,28 @@ class LightRig {
         rgb(world.seaShallow, seaShallow)
         rgb(world.foam, foam)
         seaStyle = world.seaStyle.code
-        caustics = if (world.seaStyle == SeaStyle.WATER || world.seaStyle == SeaStyle.SODA) 1f else 0f
-        waveAmp = when (world.seaStyle) { SeaStyle.WATER -> 1f; SeaStyle.SODA -> 0.7f; SeaStyle.LAVA -> 0.25f; SeaStyle.CLOUDS -> 0.15f }
+        // clean, calm sea: no underwater caustics, gentle swell
+        caustics = 0f
+        waveAmp = when (world.seaStyle) { SeaStyle.WATER -> 0.5f; SeaStyle.SODA -> 0.5f; SeaStyle.LAVA -> 0.25f; SeaStyle.CLOUDS -> 0.15f }
         night = 0f
         lanternGlow = 0f
         when (time) {
             TimeOfDay.NOON -> {
                 setDir(-0.42f, 0.86f, -0.36f)
-                set(sunColor, 0.66f, 0.6f, 0.48f)
-                set(ambSky, 0.62f, 0.74f, 0.92f)
-                set(ambGround, 0.55f, 0.55f, 0.52f)
-                set(rim, 0.6f, 0.78f, 1.0f)
+                set(sunColor, 0.34f, 0.33f, 0.3f)
+                set(ambSky, 0.7f, 0.72f, 0.77f)
+                set(ambGround, 0.57f, 0.57f, 0.61f)
+                set(rim, 0.3f, 0.36f, 0.45f)
                 for (i in 0..2) { skyTop[i] = bTop[i]; skyHorizon[i] = bHor[i]; fog[i] = bFog[i] }
                 set(skyGlow, 1f, 0.92f, 0.75f)
                 set(gradeTint, 1f, 1f, 1f)
-                saturation = 1.12f; contrast = 1.04f; brightness = 1.0f
+                saturation = 1.06f; contrast = 1.0f; brightness = 1.0f
             }
             TimeOfDay.MORNING -> {
                 setDir(0.62f, 0.5f, -0.3f)
-                set(sunColor, 0.66f, 0.56f, 0.44f)
-                set(ambSky, 0.6f, 0.68f, 0.9f)
-                set(ambGround, 0.55f, 0.5f, 0.55f)
+                set(sunColor, 0.38f, 0.33f, 0.27f)
+                set(ambSky, 0.68f, 0.68f, 0.76f)
+                set(ambGround, 0.57f, 0.53f, 0.57f)
                 set(rim, 1.0f, 0.82f, 0.7f)
                 mix(skyTop, bTop, floatArrayOf(0.45f, 0.62f, 0.95f), 0.4f)
                 mix(skyHorizon, bHor, floatArrayOf(1.0f, 0.86f, 0.78f), 0.45f)
@@ -82,9 +83,9 @@ class LightRig {
             }
             TimeOfDay.SUNSET -> {
                 setDir(-0.78f, 0.36f, -0.2f)
-                set(sunColor, 0.78f, 0.5f, 0.3f)
-                set(ambSky, 0.56f, 0.5f, 0.76f)
-                set(ambGround, 0.55f, 0.42f, 0.48f)
+                set(sunColor, 0.44f, 0.31f, 0.21f)
+                set(ambSky, 0.62f, 0.56f, 0.7f)
+                set(ambGround, 0.57f, 0.47f, 0.51f)
                 set(rim, 1.0f, 0.62f, 0.45f)
                 mix(skyTop, bTop, floatArrayOf(0.3f, 0.3f, 0.66f), 0.6f)
                 mix(skyHorizon, bHor, floatArrayOf(1.0f, 0.66f, 0.45f), 0.68f)

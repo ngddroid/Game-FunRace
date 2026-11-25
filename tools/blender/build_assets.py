@@ -5,7 +5,7 @@ Run from the project root:
     ~/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup \
         --python tools/blender/build_assets.py -- [module ...] [--only name,name]
 
-Modules: character, course, hazards, env. With no module, everything is rebuilt.
+Modules: character, kids, course, hazards, env. With no module, everything is rebuilt.
 Deterministic: same scripts -> same meshes.
 """
 import os
@@ -29,7 +29,7 @@ while i < len(argv):
         mods.append(argv[i])
         i += 1
 if not mods:
-    mods = ["character", "course", "hazards", "env"]
+    mods = ["character", "kids", "course", "hazards", "env"]
 
 t0 = time.time()
 total = {}

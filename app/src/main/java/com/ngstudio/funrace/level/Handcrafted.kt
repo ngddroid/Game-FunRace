@@ -7,9 +7,9 @@ import com.ngstudio.funrace.level.Piece.Deck
 import com.ngstudio.funrace.level.Piece.Turn
 
 /**
- * Levels 1..10, tuned by hand to teach one idea at a time. Every one runs with the Race Director
- * ([LevelSpec.guaranteeWin]): rivals stay behind a player who keeps going, hazards are slow with
- * wide safe windows, and checkpoints sit before every hazard.
+ * Levels 1..10, tuned by hand to teach one idea at a time: hazards are slow with wide safe windows
+ * and checkpoints sit before every hazard. Rivals race for real from level 1 (a little gentler in
+ * the first levels), so dawdling or getting bonked can cost you the podium.
  */
 object Handcrafted {
     private fun H(t: HazType, at: Float, period: Float = 3.4f, phase: Float = 0f, side: Float = 1f, p: Float = 0f, q: Float = 0f) = HazSpec(t, at, period, phase, side, p, q)
@@ -17,8 +17,8 @@ object Handcrafted {
     private fun spec(level: Int, name: String, intro: String, newThing: String, rivals: Int, pieces: List<Piece>, kind: RaceKind = RaceKind.TUTORIAL, chaser: Float = 0f, startY: Float = 3f) =
         LevelSpec(
             level = level, seed = 1000L + level, name = name, world = World.LAGOON, time = TimeOfDay.NOON, kind = kind,
-            width = 4.6f, startY = startY, pieces = pieces, rivals = rivals, rivalSkill = 0.38f, difficulty = 0.05f + level * 0.01f,
-            guaranteeWin = true, chaserSpeed = chaser, chaserDelay = 5f, intro = intro, newThing = newThing,
+            width = 4.6f, startY = startY, pieces = pieces, rivals = rivals, rivalSkill = 0.46f + level * 0.02f, difficulty = 0.05f + level * 0.01f,
+            chaserSpeed = chaser, chaserDelay = 5f, intro = intro, newThing = newThing,
         )
 
     fun get(level: Int): LevelSpec = when (level) {
@@ -34,7 +34,7 @@ object Handcrafted {
             Deck(12f, listOf(H(HazType.PUSHER, 6f, 3.4f, 0.9f, 1f, 0.6f)), rails = true),
             Turn(-20f, 12f, coins = 5),
         ))
-        2 -> spec(2, "Swing Time", "Rubber ducks swing across. Watch them, then dash!", "Duck Pendulum", 3, listOf(
+        2 -> spec(2, "Swing Time", "Rubber ducks and a giant mallet swing across. Watch them, then dash!", "Duck Pendulum + Mega Mallet", 3, listOf(
             Deck(10f, rails = true, coins = 5),
             Checkpoint,
             Deck(10f, listOf(H(HazType.PENDULUM, 5f, 3.6f, 0f, p = 0.82f))),
@@ -45,7 +45,7 @@ object Handcrafted {
             Checkpoint,
             Deck(10f, listOf(H(HazType.PENDULUM, 5f, 3.4f, 0.8f, p = 0.85f, q = 1f))),
             Checkpoint,
-            Deck(12f, listOf(H(HazType.PUSHER, 6f, 3.4f, 0.2f, -1f, 0.6f)), rails = true),
+            Deck(10f, listOf(H(HazType.HAMMER, 5f, 4.0f, 0.4f, p = 0.9f))),
             Turn(-25f, 12f, coins = 5),
         ))
         3 -> spec(3, "Spin Cycle", "Noodles spin low. Swipe up or tap JUMP to hop right over them!", "Noodle Sweeper", 3, listOf(
@@ -62,7 +62,7 @@ object Handcrafted {
             Deck(12f, listOf(H(HazType.SWEEPER, 6f, phase = 0.5f, p = 1.55f, q = 1f))),
             Turn(-20f, 12f, coins = 5),
         ))
-        4 -> spec(4, "Bounce Bay", "Bounce pads launch you across the water. Wheee!", "Bounce Pads", 3, listOf(
+        4 -> spec(4, "Bounce Bay", "Bounce pads launch you across the water. The spin bar is too high to hop: let it swing away, then go!", "Bounce Pads + Spin Bar", 3, listOf(
             Deck(10f, rails = true, coins = 5),
             Piece.Jump(7f, 2.4f),
             Deck(6f, rails = true),
@@ -71,7 +71,7 @@ object Handcrafted {
             Piece.Jump(8f, 3f),
             Deck(5f, rails = true),
             Checkpoint,
-            Deck(10f, listOf(H(HazType.PENDULUM, 5f, 3.4f, 1.1f, p = 0.85f))),
+            Deck(17f, listOf(H(HazType.SPINNER, 8.5f, phase = 0.6f, side = 1f, p = 1.6f))),
             Turn(25f, 14f, coins = 6),
             Checkpoint,
             Deck(12f, listOf(H(HazType.SWEEPER, 6f, phase = 0.3f, p = 1.5f, q = 1f))),
@@ -93,10 +93,10 @@ object Handcrafted {
             Deck(14f, listOf(H(HazType.PUSHER, 5f, 3.2f, 0.4f, 1f, 0.6f), H(HazType.PUSHER, 10f, 3.2f, 1.9f, -1f, 0.6f))),
             Turn(-20f, 12f, coins = 5),
         ))
-        6 -> spec(6, "Up We Go", "Hold to climb, let go to hang on. Dodge the coconuts!", "Climbing Wall", 4, listOf(
+        6 -> spec(6, "Up We Go", "Rollers squeeze in from both sides: run through when they open. Then climb the wall and dodge the coconuts!", "Roller Squeeze + Climbing Wall", 4, listOf(
             Deck(10f, rails = true, coins = 5),
             Checkpoint,
-            Deck(12f, listOf(H(HazType.PUSHER, 6f, 3.2f, 0.7f, -1f, 0.6f))),
+            Deck(10f, listOf(H(HazType.ROLLERS, 5f, 3.4f, 0.7f))),
             Deck(4f, rails = true),
             Piece.Climb(4f, 3.2f, 0.4f),
             Deck(8f, rails = true, coins = 5),
@@ -122,7 +122,7 @@ object Handcrafted {
             Deck(12f, listOf(H(HazType.PUSHER, 6f, 3.2f, 1.3f, 1f, 0.65f))),
             Turn(-30f, 14f, coins = 6),
             Checkpoint,
-            Deck(12f, listOf(H(HazType.SWEEPER, 6f, phase = 0.2f, p = -1.25f, q = 1f))),
+            Deck(12f, listOf(H(HazType.SWEEPER, 6f, phase = 2.0f, p = -1.25f, q = 1f))),
             Deck(6f, rails = true, coins = 4),
         ))
         8 -> spec(8, "Punch Party", "Gloves wind up before they punch. Spot the wiggle!", "Boxing Gloves", 4, listOf(
@@ -151,7 +151,7 @@ object Handcrafted {
             Piece.Zip(16f, 1.6f),
             Deck(6f, rails = true, coins = 4),
             Checkpoint,
-            Deck(10f, listOf(H(HazType.GLOVES, 5f, 3.0f, 0.8f, -1f, 0.72f))),
+            Deck(10f, listOf(H(HazType.GLOVES, 5f, 3.0f, 2.0f, -1f, 0.72f))),
             Turn(30f, 14f, coins = 6),
             Checkpoint,
             Deck(10f, listOf(H(HazType.PENDULUM, 5f, 3.2f, 1.2f, p = 0.88f))),

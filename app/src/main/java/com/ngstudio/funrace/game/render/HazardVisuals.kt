@@ -12,12 +12,17 @@ import com.ngstudio.funrace.game.sim.Course
 import com.ngstudio.funrace.game.sim.Fan
 import com.ngstudio.funrace.game.sim.Gates
 import com.ngstudio.funrace.game.sim.Gloves
+import com.ngstudio.funrace.game.sim.Hammer
+import com.ngstudio.funrace.game.sim.HazardGeometry
 import com.ngstudio.funrace.game.sim.Hazard
 import com.ngstudio.funrace.game.sim.PaddleWheel
 import com.ngstudio.funrace.game.sim.Pendulum
 import com.ngstudio.funrace.game.sim.Press
 import com.ngstudio.funrace.game.sim.Pusher
 import com.ngstudio.funrace.game.sim.Raft
+import com.ngstudio.funrace.game.sim.SetPieceGeometry
+import com.ngstudio.funrace.game.sim.Rollers
+import com.ngstudio.funrace.game.sim.Spinner
 import com.ngstudio.funrace.game.sim.Sweeper
 import com.ngstudio.funrace.game.sim.Tilt
 import com.ngstudio.funrace.game.sim.Trapdoor
@@ -45,6 +50,7 @@ class HazardVisuals(private val res: RenderResources, private val course: Course
     private fun b(name: String) = res.meshes.batch(name)
 
     /** Places a model at course (s, d, h) with local yaw/pitch/roll relative to the course frame. */
+    /** Places a model. NB: [sy] and [sz] default to [sx] (uniform scale); stretch one axis by passing all three. */
     private fun put(name: String, s: Float, d: Float, h: Float, yaw: Float = 0f, pitch: Float = 0f, roll: Float = 0f,
                     sx: Float = 1f, sy: Float = sx, sz: Float = sx, tA: Int = A, tB: Int = B, wobble: Float = 0f, phase: Float = 0f, emissive: Float = 0f) {
         course.world(s, d, h, p)
@@ -79,7 +85,9 @@ class HazardVisuals(private val res: RenderResources, private val course: Course
             is Raft -> {
                 val c = st[0]
                 val bob = sin(t * 2.2f) * 0.04f
-                put("raft", c, 0f, -0.02f + bob, pitch = sin(t * 1.7f) * 0.02f, roll = sin(t * 1.3f) * 0.03f, sx = 1f, sy = 1f, sz = 1f, tA = A, tB = pad)
+                // stretched sideways so every lane rides on it
+                put("raft", c, 0f, -0.02f + bob, pitch = sin(t * 1.7f) * 0.02f, roll = sin(t * 1.3f) * 0.03f,
+                    sx = 2f * SetPieceGeometry.raftHalfWidth(hw) / SetPieceGeometry.RAFT_MODEL, sy = 1f, sz = 1f, tA = A, tB = pad)
             }
             is Pusher -> {
                 val side = st[1]
@@ -88,7 +96,7 @@ class HazardVisuals(private val res: RenderResources, private val course: Course
                 put("side_box", s0, side * hw, 0f, yaw)
                 val face = side * (hw - e)
                 val origin = face + side * 0.6f
-                if (e > 0.02f) put("piston", s0, side * hw, 0.62f, yaw, sx = max(0.05f, e - 0.55f))
+                if (e > 0.02f) put("piston", s0, side * hw, 0.62f, yaw, sx = max(0.05f, e - 0.55f), sy = 1f, sz = 1f)
                 put("pusher_pad", s0, origin, 0.0f, yaw, tA = pad, tB = A, wobble = wob, phase = s0)
             }
             is Gloves -> {
@@ -96,10 +104,10 @@ class HazardVisuals(private val res: RenderResources, private val course: Course
                 val e = st[0]
                 val yaw = if (side > 0f) 0f else PI_F
                 put("side_box", s0, side * hw, 0f, yaw)
-                val len = max(0.15f, e + 0.25f)
+                val g = HazardGeometry.glove(hw, side, e)
                 val shake = if (st[2] in 0.5f..0.72f) sin(t * 60f) * 0.03f else 0f
-                put("spring", s0, side * hw, 0.75f + shake, yaw, sx = len, sy = 1.6f, sz = 1.6f)
-                put("glove", s0, side * (hw - len), 0.75f + shake, yaw, sx = 1.2f, tA = world.danger, tB = B, wobble = wob, phase = s0)
+                put("spring", s0, side * hw, 0.75f + shake, yaw, sx = g.springLen, sy = 1.6f, sz = 1.6f)
+                put("glove", s0, g.gloveD, 0.75f + shake, yaw, sx = 1.2f, tA = world.danger, tB = B, wobble = wob, phase = s0)
             }
             is Pendulum -> {
                 gantry(s0, hw, h.pivotH)
@@ -110,8 +118,36 @@ class HazardVisuals(private val res: RenderResources, private val course: Course
                 val by = h.pivotH - h.rope * cos(th)
                 put(bobFor(st[3].toInt()), s0, bx, by - 0.05f, roll = roll * 0.6f, sx = 1f, tA = if (world == World.LAGOON) 0xFFD23F else A, tB = if (world == World.LAGOON) 0xFF8A3D else B, wobble = wob * 0.6f, phase = s0)
             }
+            is Spinner -> {
+                // post just off the edge, a rotating head, and the long striped bar with a ball tip
+                val ang = st[0]; val len = st[1]; val hubD = st[2]; val hgt = st[3]
+                val yaw = -ang - PI_F / 2f
+                put("spin_post", s0, hubD, hgt - 0.3f, tA = A, tB = world.pillar)
+                put("spin_hub", s0, hubD, hgt, yaw = yaw, tA = A, tB = B, wobble = wob * 0.5f, phase = s0)
+                put("spin_bar", s0, hubD, hgt, yaw = yaw, sx = len, sy = 1f, sz = 1f, tA = A, tB = B)
+                put("noodle_tip", s0 + cos(ang) * len, hubD + sin(ang) * len, hgt, sx = 1.15f, tA = A, tB = B)
+            }
+            is Hammer -> {
+                gantry(s0, hw, h.pivotH + 0.12f)
+                put("mallet", s0, 0f, h.pivotH, roll = -st[0], tA = A, tB = B, wobble = wob * 0.5f, phase = s0)
+            }
+            is Rollers -> {
+                val spinA = st[2]
+                for (r in 0..1) {
+                    val c = st[r]
+                    val sa = s0 + h.rowA[r]
+                        for (side in floatArrayOf(-1f, 1f)) {
+                        val yaw = if (side > 0f) 0f else PI_F
+                        put("side_box", sa, side * hw, 0f, yaw, sx = 1f, sy = 0.85f, sz = 1f)
+                        // fixed-length roller sliding through its housing; rounded tip exactly at the gap
+                        put("roller", sa, HazardGeometry.rollerOrigin(hw, c, side), h.rollH, yaw, pitch = spinA * side, sx = hw, sy = 1f, sz = 1f, tA = A, tB = B)
+                    }
+                }
+            }
             is Turntable -> {
                 put("turntable", s0, 0f, 0.0f, yaw = st[0], sx = h.armLen + 0.35f, sy = 1f, sz = h.armLen + 0.35f, tA = A, tB = B)
+                // the arms meet on a solid centre stand (racers bump off it)
+                put("sweeper_hub", s0, st[3], 0f, yaw = st[0], sx = 0.75f, sy = 0.95f, sz = 0.75f, tA = A, tB = B)
                 sweeperArms(h, st, s0, 0.1f)
             }
             is Sweeper -> {
@@ -132,13 +168,13 @@ class HazardVisuals(private val res: RenderResources, private val course: Course
                     val a = if (r == 0) -h.tileLen / 2f else h.tileLen / 2f
                     val side = if (c == 0) -1f else 1f
                     val yaw = if (side > 0f) 0f else PI_F
-                    put("tile", s0 + a, side * hw, shake, yaw, roll = -open * 1.45f, sx = hw, sy = 1f, sz = h.tileLen - 0.06f,
+                    put("tile", s0 + a, side * hw, shake, yaw, roll = -open * SetPieceGeometry.TILE_OPEN_ANGLE, sx = hw, sy = 1f, sz = h.tileLen - 0.06f,
                         tA = if ((r + c) % 2 == 0) world.deck else world.stripe, tB = world.danger)
                 }
             }
             is PaddleWheel -> {
                 for (side in floatArrayOf(-1f, 1f)) put("axle_support", s0, side * (hw + 0.35f), -0.3f, sx = 1f, sy = (h.axleH + 0.3f) / 2.6f, sz = 1f)
-                put("paddle_wheel", s0, 0f, h.axleH, pitch = st[0], sx = hw * 2f + 0.2f, sy = 1f, sz = 1f, tA = pad, tB = A)
+                put("paddle_wheel", s0, 0f, h.axleH, pitch = HazardGeometry.paddleVisualPitch(st[0]), sx = hw * 2f + 0.2f, sy = 1f, sz = 1f, tA = pad, tB = A)
             }
             is Cannon -> {
                 val side = st[1]
@@ -174,7 +210,7 @@ class HazardVisuals(private val res: RenderResources, private val course: Course
                     val yaw = if (side > 0f) 0f else PI_F
                     put("gate_door", s0, side * (hw + 0.1f), 0f, yaw, sx = len, sy = 1f, sz = 1f, tA = pad, tB = A)
                 }
-                put("beam", s0, 0f, 2.45f, sx = hw * 2f + 0.6f)
+                put("beam", s0, 0f, 2.45f, sx = hw * 2f + 0.6f, sy = 1.1f, sz = 1.1f)
             }
             is Wave -> {
                 val side = st[2]
@@ -199,13 +235,20 @@ class HazardVisuals(private val res: RenderResources, private val course: Course
                     val yaw = course.yawAt(s0 - 0.5f)
                     Inst.add(b("coconut"), p[0] - sin(yaw) * 0.45f, p[1] + nh - 0.0f, p[2] - cos(yaw) * 0.45f, t * 4f, t * 3f, 0f, 1.2f)
                 }
-                course.world(s0, 0f, h.wallH, p)
-                put("coconut_dropper", s0 - 0.3f, -hw * 0.45f, h.wallH + 0.25f, roll = 0.2f, sx = 1.4f)
-                put("coconut_dropper", s0 - 0.3f, hw * 0.45f, h.wallH + 0.25f, roll = -0.2f, sx = 1.4f)
+                // one basket per drop column, hung from a gantry high over the wall top so climbers
+                // pass underneath; it tips forward just before letting go (the warning)
+                val cols = h.columns
+                val bh = h.wallH + Coconuts.BASKET_ABOVE
+                gantry(s0 - 0.45f, hw, bh + 0.6f)
+                for (c in 0..2) {
+                    for (side in floatArrayOf(-0.5f, 0.5f)) put("rope", s0 - 0.45f, cols[c] + side, bh + 0.33f, sx = 1f, sy = 0.2f, sz = 1f)
+                    put("coconut_dropper", s0 - 0.45f, cols[c], bh, pitch = -st[4 + c] * 0.9f, sx = 1.4f)
+                }
             }
             is Conveyor -> {
-                for (side in floatArrayOf(-1f, 1f)) put("conveyor_roller", s0 - h.halfLen, 0f, -0.05f, sx = hw * 2f)
-                put("conveyor_roller", s0 + h.halfLen, 0f, -0.05f, sx = hw * 2f)
+                // end rollers: as long as the belt is wide, never thicker than the model (they sit in the deck)
+                put("conveyor_roller", s0 - h.halfLen, 0f, -0.05f, sx = hw * 2f, sy = 1f, sz = 1f)
+                put("conveyor_roller", s0 + h.halfLen, 0f, -0.05f, sx = hw * 2f, sy = 1f, sz = 1f)
             }
             else -> Unit
         }

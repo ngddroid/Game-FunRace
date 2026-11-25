@@ -1,0 +1,14 @@
+# Gradle caches and build output
+.gradle/
+build/
+**/build/
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+
+# OS and Python leftovers
+.DS_Store
+__pycache__/
+*.pyc

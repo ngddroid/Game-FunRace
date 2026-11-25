@@ -18,14 +18,16 @@ data class CharacterDef(
     val rarity: Rarity,
     val price: Int,
     val currency: Currency,
-    /** Onesie colour. */
+    /** Onesie colour (Dashling) or shirt colour (kid). */
     val primary: Int,
-    /** Belly / hood-rim / cuffs. */
+    /** Belly / hood-rim / cuffs (Dashling) or pants colour (kid). */
     val secondary: Int,
     val skin: Int = 0xFFD9B3,
     val shoe: Int = 0xFFFFFF,
     val accessories: List<Accessory> = emptyList(),
     val blurb: String = "",
+    /** Skinned body mesh: [Catalog.BODY_DASHLING] (chibi hooded onesie) or [Catalog.BODY_HUMAN] (kid racer). */
+    val body: String = Catalog.BODY_DASHLING,
 )
 
 data class HatDef(val id: String, val name: String, val rarity: Rarity, val price: Int, val currency: Currency, val mesh: String, val color: Int, val color2: Int)
@@ -44,7 +46,11 @@ object Bones {
 }
 
 object Catalog {
-    const val DEFAULT_CHARACTER = "dash"
+    const val BODY_DASHLING = "dashling"
+    /** Human-proportioned kid racer body (its own longer skeleton; head parts are fitted onto it). */
+    const val BODY_HUMAN = "human"
+    /** New players start as Kai (one of the kid racers); existing saves keep their character. */
+    const val DEFAULT_CHARACTER = "kai"
     const val NO_HAT = "none"
     const val NO_TRAIL = "none"
     const val DEFAULT_DANCE = "hop"
@@ -60,7 +66,35 @@ object Catalog {
 
     private fun acc(mesh: String, bone: Int = Bones.HEAD, color: Int = 0, color2: Int = 0) = Accessory(mesh, bone, color, color2)
 
-    val characters: List<CharacterDef> = listOf(
+    /** A kid racer: shirt/pants colours, a hairstyle (colour + accent) and an optional backpack. */
+    private fun kid(
+        id: String, name: String, rarity: Rarity, price: Int, currency: Currency,
+        shirt: Int, pants: Int, skin: Int, shoe: Int, hair: String, hairColor: Int, hairAccent: Int,
+        backpack: Pair<Int, Int>? = null, blurb: String = "",
+    ) = CharacterDef(
+        id, name, rarity, price, currency, shirt, pants, skin, shoe,
+        listOfNotNull(acc(hair, color = hairColor, color2 = hairAccent), backpack?.let { acc("acc_backpack", Bones.CHEST, it.first, it.second) }),
+        blurb, BODY_HUMAN,
+    )
+
+    /** Kid racers: the default look for new players and for rival bots. */
+    val kids: List<CharacterDef> = listOf(
+        kid("kai", "Kai", Rarity.COMMON, 0, Currency.COINS, 0xFF8A3D, 0x2B3A66, 0xEDB48C, 0xFFFFFF, "hair_spiky", 0x3B2A20, 0x3B2A20, blurb = "Spikes up, sneakers laced, ready to dash."),
+        kid("mia", "Mia", Rarity.COMMON, 0, Currency.COINS, 0xFF6FA8, 0xF4F6FA, 0xF7C6A6, 0xFF5FA8, "hair_ponytail", 0x8A4B2A, 0xFF5FA8, blurb = "Her ponytail is always a step behind."),
+        kid("leo", "Leo", Rarity.COMMON, 0, Currency.COINS, 0xFFD23F, 0x3FAF6A, 0x8D5A3B, 0xFF6B57, "hair_curly", 0x2A2230, 0x2A2230, backpack = 0x2E9BFF to 0xFFD23F, blurb = "Packs snacks for every race."),
+        kid("zoe", "Zoe", Rarity.COMMON, 800, Currency.COINS, 0x5FE3C0, 0x7A5CFF, 0xEDB48C, 0xFFFFFF, "hair_buns", 0x1E1E28, 0x5FE3C0),
+        kid("ravi", "Ravi", Rarity.COMMON, 800, Currency.COINS, 0x19C6C2, 0xD9C29B, 0xA8714A, 0xFFFFFF, "hair_crop", 0x221A18, 0x221A18, backpack = 0xFFD23F to 0xFF6B57),
+        kid("ana", "Ana", Rarity.COMMON, 800, Currency.COINS, 0xFFD23F, 0x3F6FD8, 0xF6C9A0, 0xFF6B57, "hair_bob", 0xD9482B, 0xFFD23F),
+        kid("sofia", "Sofia", Rarity.COMMON, 800, Currency.COINS, 0xFF6B57, 0xF4F6FA, 0xF6C8A8, 0xFFFFFF, "hair_braid", 0xF2C94C, 0xFF6B57),
+        kid("sam", "Sam", Rarity.COMMON, 800, Currency.COINS, 0x2E9BFF, 0xFFD23F, 0xF6C8A8, 0xFFFFFF, "hair_pigtails", 0xF2A65A, 0x7BE36B),
+        kid("max", "Max", Rarity.RARE, 2000, Currency.COINS, 0x2B2B33, 0xE8433A, 0xF6C9A0, 0xFFD23F, "hair_mohawk", 0x2E9BFF, 0x6B4A3A, blurb = "Blue mohawk, zero brakes."),
+        kid("jin", "Jin", Rarity.RARE, 2000, Currency.COINS, 0xF4F6FA, 0x2B2B33, 0xEDBF95, 0xE8433A, "hair_topbun", 0x1A1A22, 0xE8433A),
+        kid("tomi", "Tomi", Rarity.RARE, 2000, Currency.COINS, 0x7BE36B, 0x2B3A66, 0xF6C9A0, 0xFFFFFF, "hair_wavy", 0x6B4226, 0x6B4226, backpack = 0xE8433A to 0xFFFFFF),
+        kid("nia", "Nia", Rarity.RARE, 2000, Currency.COINS, 0x4FB0F0, 0xFF8FC7, 0x6B4430, 0xFFFFFF, "hair_puffs", 0x2A1E1A, 0xFFD23F, blurb = "Two puffs, twice the bounce."),
+        kid("luna", "Luna", Rarity.EPIC, 5000, Currency.COINS, 0x9B6BFF, 0xF4F6FA, 0xF5CDB0, 0xC9A6FF, "hair_long", 0xC9A6FF, 0xFFFFFF, blurb = "Lilac hair that shimmers in the sun."),
+    )
+
+    val characters: List<CharacterDef> = kids + listOf(
         CharacterDef("dash", "Dash", Rarity.COMMON, 0, Currency.COINS, 0x19C6C2, 0xF6FFFE, blurb = "Always first off the starting dock."),
         CharacterDef("coral", "Coral", Rarity.COMMON, 800, Currency.COINS, 0xFF6B57, 0xFFE9B8, skin = 0xF2C29B),
         CharacterDef("sunny", "Sunny", Rarity.COMMON, 800, Currency.COINS, 0xFFD23F, 0xFF8A3D, skin = 0xFFDDBB),
@@ -154,6 +188,9 @@ object Catalog {
     fun trail(id: String) = trailMap[id] ?: trails[0]
     fun dance(id: String) = danceMap[id] ?: dances[0]
 
-    /** Rival looks: everything except reward-only characters, deterministic per seed. */
-    val rivalPool: List<CharacterDef> = characters.filter { it.currency != Currency.REWARD }
+    /** Rival bots race as the kid racers (never as reward-only characters). */
+    val rivalPool: List<CharacterDef> = kids
+
+    /** Headwear that suits the kids (rivals sometimes wear one). */
+    val rivalHats: List<HatDef> = listOf("cap", "bucket", "visor", "headphones", "propeller").map { hat(it) }
 }

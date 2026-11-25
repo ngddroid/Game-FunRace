@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar icon for notifications: a water drop with a shine (white only; Android tints it). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M12,2.2C12,2.2 5.2,9.9 5.2,14.6A6.8,6.8 0,0 0,18.8 14.6C18.8,9.9 12,2.2 12,2.2ZM8.4,14.2A1.25,1.25 0,1 0,10.9 14.2A1.25,1.25 0,1 0,8.4 14.2ZM9.2,17.2Q10.2,18.5 12,18.7L11.8,19.9Q9.5,19.7 8.2,17.9Z" />
+</vector>

@@ -156,7 +156,9 @@ def podium():
     """Three steps: 1st centre (h 1.2), 2nd left (+X, h 0.85), 3rd right (h 0.6). Width 1.6 each."""
     parts = []
     for (x, h, col, glow) in [(0, 1.2, 0xFFD23F, 0.0), (1.65, 0.85, 0xC9D6E6, 0.0), (-1.65, 0.6, 0xE09A5A, 0.0)]:
-        parts.append(rbox(1.6, h, 1.6, (x, h / 2, 0), mat=paint(col, 0, 0.6), r=0.12))
+        # body stops inside the white top plate so the two tops never share a plane (z-fighting)
+        hb = h - 0.07
+        parts.append(rbox(1.6, hb, 1.6, (x, hb / 2, 0), mat=paint(col, 0, 0.6), r=0.12))
         parts.append(rbox(1.66, 0.12, 1.66, (x, h - 0.06, 0), mat=paint(0xFFFFFF, 0, 0.4), r=0.05))
         # star emblem on the front
         pts = []

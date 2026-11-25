@@ -5,9 +5,9 @@ import com.ngstudio.funrace.core.Quat
 import com.ngstudio.funrace.core.Rng
 import com.ngstudio.funrace.core.TAU
 import com.ngstudio.funrace.game.sim.Course
-import com.ngstudio.funrace.game.sim.HazType
 import com.ngstudio.funrace.game.sim.SegKind
 import com.ngstudio.funrace.game.sim.Segment
+import com.ngstudio.funrace.game.sim.SetPieceGeometry
 import com.ngstudio.funrace.level.RaceSetup
 import com.ngstudio.funrace.level.World
 import kotlin.math.abs
@@ -15,6 +15,7 @@ import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -44,13 +45,7 @@ class TrackBuilder(private val setup: RaceSetup, private val world: World) {
     private fun chunkFor(s: Float) = chunks[(s / chunkLen).toInt().coerceIn(0, chunkCount - 1)]
 
     /** Deck ranges replaced by dynamic hazard pieces (trapdoors, tilting decks). */
-    private val cutouts: List<FloatArray> = setup.hazards.mapNotNull { h ->
-        when (h.type) {
-            HazType.TRAPDOOR -> floatArrayOf(h.s0 - 1.7f, h.s0 + 1.7f)
-            HazType.TILT -> floatArrayOf(h.zoneStart, h.zoneEnd)
-            else -> null
-        }
-    }
+    private val cutouts: List<FloatArray> = setup.hazards.mapNotNull { SetPieceGeometry.deckHole(it) }
 
     private fun cut(s: Float): Boolean { for (c in cutouts) if (s > c[0] && s < c[1]) return true; return false }
 
@@ -78,7 +73,8 @@ class TrackBuilder(private val setup: RaceSetup, private val world: World) {
         }
     }
 
-    private fun stripeAt(s: Float): Boolean = floor(s / 3f).toInt() % 2 == 0 && (s % 3f) < 0.7f
+    /** Clean alternating 1 m bands across the deck (subtle, so hazards and zones read first). */
+    private fun stripeAt(s: Float): Boolean = floor(s / BAND).toInt() % 2 == 0
 
     private fun deck(seg: Segment, hw: Float, trims: Boolean) {
         // break points: every 0.5 m plus stripe boundaries for crisp colour changes
@@ -86,13 +82,15 @@ class TrackBuilder(private val setup: RaceSetup, private val world: World) {
         var s = seg.s0
         while (s < seg.s1) {
             pts += s
-            val nextStripe = floor(s / 3f) * 3f + (if ((s % 3f) < 0.7f) 0.7f else 3f)
+            val nextStripe = (floor(s / BAND) + 1f) * BAND
             s = min(min(s + 0.5f, seg.s1), if (nextStripe > s + 0.01f) nextStripe else s + 0.5f)
         }
         pts += seg.s1
         val deckC = world.deck
-        val stripeC = world.stripe
-        val seamC = mix(deckC, 0x000000, 0.12f)
+        // soft cool-grey bands with just a hint of the world colour; no seams (one clean slab)
+        val stripeC = mix(deckC, mix(world.stripe, 0xAFBBCB, 0.75f), 0.38f)
+        val seamC = deckC
+        val railC = mix(world.stripe, 0xFFFFFF, 0.45f)
         val chambers = floatArrayOf(-hw + 0.1f, -hw / 3f - 0.03f, -hw / 3f + 0.03f, hw / 3f - 0.03f, hw / 3f + 0.03f, hw - 0.1f)
         for (i in 0 until pts.size - 1) {
             val a = pts[i]; val b = pts[i + 1]
@@ -100,21 +98,16 @@ class TrackBuilder(private val setup: RaceSetup, private val world: World) {
             val md = chunkFor(a)
             val mid = (a + b) / 2f
             val stripe = stripeAt(mid) && seg.kind != SegKind.BEAM
-            val isStart = seg.kind == SegKind.START && mid > course.startS + 0.6f && mid < course.startS + 1.4f
-            val isFinish = seg.kind == SegKind.FINISH && mid > course.finishS - 0.4f && mid < course.finishS + 0.4f
             // top: 3 inflated chambers separated by seams
             for (k in 0 until chambers.size - 1) {
                 val d0 = chambers[k]; val d1 = chambers[k + 1]
                 val seam = k % 2 == 1
                 val col = when {
-                    isStart || isFinish -> if ((floor((d0 + hw) / 0.5f).toInt() + (if (mid % 1f < 0.5f) 0 else 1)) % 2 == 0) 0x1B2340 else 0xFFFFFF
-                    seam -> seamC
                     stripe -> stripeC
+                    seam -> seamC
                     else -> deckC
                 }
-                val h = if (seam) -0.01f else 0.02f
-                val bulge = if (seam) 0f else 0.03f
-                quadTop(md, a, b, d0, d1, h, bulge, col, if (seam) Mat.MATTE else Mat.of(gloss = 0.35f))
+                quadTop(md, a, b, d0, d1, 0.02f, 0f, col, Mat.of(gloss = 0.12f))
             }
             // side skirts and bottom
             val skirtC = world.skirt
@@ -122,12 +115,15 @@ class TrackBuilder(private val setup: RaceSetup, private val world: World) {
             skirt(md, a, b, hw, 1f, skirtC)
             bottom(md, a, b, hw, mix(skirtC, 0x000000, 0.3f))
             if (trims) {
-                tube(md, a, b, -hw + 0.08f, 0.04f, 0.15f, world.trim, Mat.of(gloss = 0.6f))
-                tube(md, a, b, hw - 0.08f, 0.04f, 0.15f, world.trim, Mat.of(gloss = 0.6f))
+                tube(md, a, b, -hw + 0.08f, 0.04f, 0.15f, world.trim, Mat.of(gloss = 0.3f))
+                tube(md, a, b, hw - 0.08f, 0.04f, 0.15f, world.trim, Mat.of(gloss = 0.3f))
             }
-            if (seg.railL) tube(md, a, b, -hw + 0.12f, 0.78f, 0.13f, world.stripe, Mat.of(gloss = 0.6f))
-            if (seg.railR) tube(md, a, b, hw - 0.12f, 0.78f, 0.13f, world.stripe, Mat.of(gloss = 0.6f))
+            if (seg.railL) tube(md, a, b, -hw + 0.12f, 0.78f, 0.08f, railC, Mat.of(gloss = 0.3f))
+            if (seg.railR) tube(md, a, b, hw - 0.12f, 0.78f, 0.08f, railC, Mat.of(gloss = 0.3f))
         }
+        // checkered start / finish line: two rows of small squares laid just above the deck
+        if (seg.kind == SegKind.START) checkerLine(hw, course.startS + 1f)
+        if (seg.kind == SegKind.FINISH) checkerLine(hw, course.finishS)
         // rail posts
         if (seg.railL || seg.railR) {
             var ps = seg.s0 + 1f
@@ -138,6 +134,21 @@ class TrackBuilder(private val setup: RaceSetup, private val world: World) {
                     if (seg.railR) post(md, ps, hw - 0.12f, 0.0f, 0.78f, 0.07f, 0xFFFFFF)
                 }
                 ps += 2.4f
+            }
+        }
+    }
+
+    private fun checkerLine(hw: Float, s: Float) {
+        val md = chunkFor(s)
+        val w = 2f * hw - 0.2f
+        val n = max(2, (w / CHECKER_CELL).roundToInt())
+        val cw = w / n
+        for (row in 0..1) {
+            val a = s - CHECKER_CELL + row * CHECKER_CELL
+            for (i in 0 until n) {
+                val d0 = -hw + 0.1f + i * cw
+                val col = if ((i + row) % 2 == 0) 0x2A3352 else 0xFFFFFF
+                quadTop(md, a, a + CHECKER_CELL, d0, d0 + cw, 0.035f, 0f, col, Mat.of(gloss = 0.12f))
             }
         }
     }
@@ -315,7 +326,8 @@ class TrackBuilder(private val setup: RaceSetup, private val world: World) {
                     for (k in 1 until hops) {
                         val s = seg.s0 + seg.length * k / hops
                         course.world(s, 0f, -0.55f, p)
-                        place(chunkFor(s), "trampoline", p[0], p[1], p[2], yaw, 1.3f, 1f, 1.3f, hzA, hzB)
+                        // oval trampoline spanning every lane
+                        place(chunkFor(s), "trampoline", p[0], p[1], p[2], yaw, SetPieceGeometry.trampolineHalfWidth(seg.halfWidth) / SetPieceGeometry.TRAMPOLINE_MODEL_R, 1f, 1.3f, hzA, hzB)
                         pillar(chunkFor(s), p[0], p[1], p[2], 0.25f)
                     }
                     for (d in floatArrayOf(-seg.halfWidth * 0.5f, seg.halfWidth * 0.5f)) {
@@ -333,12 +345,14 @@ class TrackBuilder(private val setup: RaceSetup, private val world: World) {
                         course.world(end, 0f, 2.9f, p)
                         place(md, "beam", p[0], p[1], p[2], course.yawAt(end), seg.width - 0.4f, 1f, 1f, hzA, hzB)
                     }
-                    // cable
-                    var s = seg.s0 - 0.6f
-                    while (s < seg.s1 + 0.6f) {
-                        val b = min(seg.s1 + 0.6f, s + 1f)
-                        tubeAbs(md, s, b, 0f, 2.42f, 0.035f, 0x9AA6B5)
-                        s = b
+                    // one cable per lane group (racers grab the nearest)
+                    for (cd in SetPieceGeometry.zipCables(seg.halfWidth)) {
+                        var s = seg.s0 - 0.6f
+                        while (s < seg.s1 + 0.6f) {
+                            val b = min(seg.s1 + 0.6f, s + 1f)
+                            tubeAbs(md, s, b, cd, SetPieceGeometry.ZIP_CABLE_H, 0.035f, 0x9AA6B5)
+                            s = b
+                        }
                     }
                 }
                 SegKind.SWING -> {
@@ -353,17 +367,19 @@ class TrackBuilder(private val setup: RaceSetup, private val world: World) {
                 }
                 SegKind.MONKEY -> {
                     val md = chunkFor(seg.s0)
-                    for (d in floatArrayOf(-0.75f, 0.75f)) {
+                    // bars as wide as the lanes so every racer hangs from a rung
+                    val mh = SetPieceGeometry.monkeyHalfWidth(seg.halfWidth)
+                    for (d in floatArrayOf(-mh, mh)) {
                         var s = seg.s0 - 0.6f
-                        while (s < seg.s1 + 0.6f) { val b = min(seg.s1 + 0.6f, s + 1f); tubeAbs(md, s, b, d, 1.62f, 0.09f, hzA); s = b }
+                        while (s < seg.s1 + 0.6f) { val b = min(seg.s1 + 0.6f, s + 1f); tubeAbs(md, s, b, d, SetPieceGeometry.MONKEY_BAR_H, 0.09f, hzA); s = b }
                     }
                     var s = seg.s0 + 0.3f
                     while (s < seg.s1) {
-                        course.world(s, 0f, 1.62f, p)
-                        place(md, "monkey_rung", p[0], p[1], p[2], course.yawAt(s), 1.5f, 1f, 1f)
+                        course.world(s, 0f, SetPieceGeometry.MONKEY_BAR_H, p)
+                        place(md, "monkey_rung", p[0], p[1], p[2], course.yawAt(s), mh * 2f, 1f, 1f)
                         s += 0.6f
                     }
-                    for (end in floatArrayOf(seg.s0 - 0.6f, seg.s1 + 0.6f)) for (d in floatArrayOf(-0.75f, 0.75f)) {
+                    for (end in floatArrayOf(seg.s0 - 0.6f, seg.s1 + 0.6f)) for (d in floatArrayOf(-mh, mh)) {
                         course.world(end, d, 0f, p)
                         place(md, "post", p[0], p[1], p[2], yaw, 0.6f, 1.7f, 0.6f, hzA, hzB)
                     }
@@ -385,9 +401,8 @@ class TrackBuilder(private val setup: RaceSetup, private val world: World) {
                 else -> Unit
             }
         }
-        // start + finish arches, podium
-        course.world(course.startS + 1f, 0f, 0f, p)
-        place(chunkFor(course.startS), "start_arch", p[0], p[1], p[2], course.yawAt(course.startS), (setup.spec.width + 1.2f) / 5.2f, 2.1f, 1f, world.hazA, world.stripe)
+        // finish arch and podium. No start arch: the racers start under it, so the high chase camera
+        // would stare into its banner for the first seconds; the checkered start line marks the start.
         course.world(course.finishS, 0f, 0f, p)
         place(chunkFor(course.finishS), "finish_arch", p[0], p[1], p[2], course.yawAt(course.finishS), (setup.spec.width + 2.5f) / 5.2f, 2.1f, 1f, world.hazA, world.stripe)
         course.world(course.finishS + 9f, 0f, 0f, p)
@@ -460,13 +475,15 @@ class TrackBuilder(private val setup: RaceSetup, private val world: World) {
         var current = MeshData(4096, 8192)
         var count = 0
         for (prop in propsFor(world)) {
+            // sparse and set back from the course so the track and hurdles read cleanly
+            val want = max(1, (prop.count * SCENERY_DENSITY).toInt())
             var made = 0
             var tries = 0
-            while (made < prop.count && tries < prop.count * 30) {
+            while (made < want && tries < want * 30) {
                 tries++
                 val s = rng.range(0f, course.length)
                 val side = rng.sign()
-                val dist = rng.range(prop.minDist, prop.maxDist)
+                val dist = rng.range(prop.minDist * 1.6f, prop.maxDist * 1.3f)
                 course.world(s, side * dist, 0f, p)
                 val x = p[0]; val z = p[2]
                 val sc = rng.range(prop.scaleMin, prop.scaleMax)
@@ -486,6 +503,10 @@ class TrackBuilder(private val setup: RaceSetup, private val world: World) {
     }
 
     companion object {
+        private const val BAND = 1.0f
+        private const val CHECKER_CELL = 0.45f
+        private const val SCENERY_DENSITY = 0.5f
+
         fun mix(a: Int, b: Int, t: Float): Int {
             val r = ((a shr 16) and 0xFF) + ((((b shr 16) and 0xFF) - ((a shr 16) and 0xFF)) * t).toInt()
             val g = ((a shr 8) and 0xFF) + ((((b shr 8) and 0xFF) - ((a shr 8) and 0xFF)) * t).toInt()

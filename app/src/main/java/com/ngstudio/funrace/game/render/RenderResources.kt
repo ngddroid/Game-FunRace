@@ -138,9 +138,9 @@ class RenderResources(val context: Context, val tier: QualityTier) {
         val sx = kotlin.math.floor(fx / waterSpacing) * waterSpacing
         val sz = kotlin.math.floor(fz / waterSpacing) * waterSpacing
         water.vec3("uOrigin", sx, waterY, sz)
-        water.vec4("uWaveA", 1f, 0.35f, 0.16f, 14f)
-        water.vec4("uWaveB", -0.4f, 1f, 0.12f, 9f)
-        water.vec4("uWaveC", 0.7f, -0.6f, 0.09f, 5.5f)
+        water.vec4("uWaveA", 1f, 0.35f, 0.11f, 14f)
+        water.vec4("uWaveB", -0.4f, 1f, 0.08f, 9f)
+        water.vec4("uWaveC", 0.7f, -0.6f, 0.055f, 5.5f)
         water.f("uWaveAmp", rig.waveAmp)
         water.f("uGridHalf", waterHalf)
         water.vec3("uDeep", rig.seaDeep)

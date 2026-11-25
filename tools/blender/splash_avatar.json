@@ -1,0 +1,3 @@
+[{"name": "Kai", "faceFit": "head", "parts": [
+  {"mesh": "human", "tints": {"1": "FF8A3D", "2": "2B3A66", "3": "EDB48C", "4": "FFFFFF"}},
+  {"mesh": "hair_spiky", "tints": {"1": "3B2A20", "2": "3B2A20"}, "fit": "head"}]}]

@@ -6,7 +6,9 @@ import com.ngstudio.funrace.core.PI_F
 import com.ngstudio.funrace.core.Quat
 import com.ngstudio.funrace.core.Rng
 import com.ngstudio.funrace.core.TAU
+import com.ngstudio.funrace.core.smoothstep
 import com.ngstudio.funrace.core.damp
+import com.ngstudio.funrace.data.Catalog
 import com.ngstudio.funrace.level.TimeOfDay
 import com.ngstudio.funrace.level.World
 import kotlin.math.cos
@@ -20,11 +22,21 @@ enum class MenuMode { HOME, SHOP, PROFILE, ONBOARD_RUN, ONBOARD_DODGE, ONBOARD_F
  * The lagoon diorama behind menus: the player's Dashling on a floating platform, with the
  * world's scenery around it. Also stages the four live onboarding scenes.
  */
+private const val SPLASH_FALL = 0.62f
+private const val SPLASH_DROP_H = 7f
+
 class MenuScene(private val res: RenderResources, world: World, time: TimeOfDay) : Scene {
     var look: Look? = null
     var hatPreview: Look? = null
     var mode = MenuMode.HOME
+        set(v) { if (v != field) { modeT = 0f; landed = false; curtainWait = 0f }; field = v }
     var danceId = "hop"
+    /** Seconds since the mode changed (drives the launch-screen entrance). */
+    private var modeT = 0f
+    private var landed = false
+    private var curtainWait = 0f
+    private var dropY = 0f
+    private var squash = 0f
     var dragYaw = 0f
     private var yaw = 0f
     private var waveT = 0f
@@ -53,8 +65,8 @@ class MenuScene(private val res: RenderResources, world: World, time: TimeOfDay)
             Mat4.trs(m, 0, x, y, z, q[0], q[1], q[2], q[3], s, s, s)
             md.append(ModelLibrary.get(name).mesh, m, tA, tB, 1f)
         }
-        // floating stage
-        place("turntable", 0f, 0.55f, 0f, 0f, 1f)
+        // floating stage: one disc only (a second, smaller disc at the same height z-fought with it
+        // and showed as a flickering ring around the racer's feet)
         Quat.euler(q, 0f, 0f, 0f)
         Mat4.trs(m, 0, 0f, 0.55f, 0f, q[0], q[1], q[2], q[3], 1.9f, 1f, 1.9f)
         md.append(ModelLibrary.get("turntable").mesh, m, world.hazA, world.hazB)
@@ -98,7 +110,18 @@ class MenuScene(private val res: RenderResources, world: World, time: TimeOfDay)
 
     override fun update(dt: Float) {
         t += dt
+        modeT += dt
         res.time = t
+        // launch screen: the racer drops out of the sky onto the stage with a splash, then waves
+        dropY = 0f
+        if (mode == MenuMode.SPLASH) {
+            // wait (out of view, up in the sky) through the system launch screen and the studio intro;
+            // the scene renders meanwhile behind them, so the landing starts warm. 10 s is only a safety net.
+            if (LaunchCurtain.down.value && curtainWait < 10f) { curtainWait += dt; modeT = 0f }
+            if (modeT < SPLASH_FALL) dropY = SPLASH_DROP_H * (1f - (modeT / SPLASH_FALL).let { it * it })
+            else if (!landed) { landed = true; squash = 1f; splashBurst() }
+        }
+        squash = max(0f, squash - dt * 3.2f)
         if (waveT > 0f) waveT -= dt
         yaw = damp(yaw, dragYaw, 8f, dt)
         if (mode != MenuMode.SHOP && mode != MenuMode.PROFILE) dragYaw = damp(dragYaw, 0f, 1.5f, dt)
@@ -108,7 +131,8 @@ class MenuScene(private val res: RenderResources, world: World, time: TimeOfDay)
             MenuMode.ONBOARD_DODGE -> if ((t % 3f) < 1.6f) Anim.idle(target, t, 0f) else Anim.run(target, t * 9f, 1f)
             MenuMode.ONBOARD_FLY -> Anim.zip(target, t)
             MenuMode.ONBOARD_STYLE -> Anim.dance(target, "spin", t, danceOut)
-            MenuMode.SPLASH -> Anim.dance(target, "cheer", t, danceOut)
+            // the launch screen: falling with arms up, then the same friendly wave as the home screen
+            MenuMode.SPLASH -> if (modeT < SPLASH_FALL) Anim.air(target, t, 1f) else Anim.wave(target, t)
             else -> if (waveT > 0f) Anim.wave(target, t) else if (mode == MenuMode.SHOP) Anim.dance(target, danceId, t, danceOut).also { if (danceId == "backflip" || danceId == "spin") { danceOut[1] = 0f; danceOut[2] = 0f } } else Anim.idle(target, t, 0f)
         }
         pose.blendTo(target, 0.25f)
@@ -129,9 +153,11 @@ class MenuScene(private val res: RenderResources, world: World, time: TimeOfDay)
             MenuMode.HOME -> floatArrayOf(0f, -0.62f, 6.8f, 1.4f)
             else -> floatArrayOf(0f, -0.35f, 6.0f, 1.4f)
         }
+        // the launch camera glides in from further out while the racer lands
+        val glide = if (mode == MenuMode.SPLASH) 3.6f * (1f - smoothstep(0f, 1.8f, modeT)) else 0f
         val camA = 0.35f + sin(t * 0.15f) * 0.06f
         camTX = damp(camTX, tx, 4f, dt); camTY = damp(camTY, ty + 1.2f, 4f, dt); camTZ = damp(camTZ, 0f, 4f, dt)
-        camX = damp(camX, sin(camA) * dist, 3f, dt); camY = damp(camY, 1.2f + h, 3f, dt); camZ = damp(camZ, cos(camA) * dist, 3f, dt)
+        camX = damp(camX, sin(camA) * (dist + glide), 3f, dt); camY = damp(camY, 1.2f + h + glide * 0.35f, 3f, dt); camZ = damp(camZ, cos(camA) * (dist + glide), 3f, dt)
         cam.x = camX; cam.y = camY; cam.z = camZ
         cam.tx = camTX; cam.ty = camTY; cam.tz = camTZ
         cam.fovDeg = 46f
@@ -147,15 +173,19 @@ class MenuScene(private val res: RenderResources, world: World, time: TimeOfDay)
         res.meshes.clearBatches()
         val baseY = 0.62f + sin(t * 1.4f) * 0.03f
         val faceYaw = 0.35f + yaw + danceOut[1]
-        drawer.setModel(0f, baseY + danceOut[0], 0f, faceYaw, danceOut[2], 0f, 1f, 1f, 1f)
-        drawer.computeSkin(pose)
+        // the human-proportioned body is taller than a Dashling: shrink it a little so it stays framed
+        val fitScale = if (lk.body == Catalog.BODY_HUMAN) 0.86f else 1f
+        // landing squash: wide and short for a moment, then springs back
+        val sq = squash * squash
+        drawer.setModel(0f, baseY + danceOut[0] + dropY, 0f, faceYaw, danceOut[2], 0f, 1f + sq * 0.14f, 1f - sq * 0.2f, 1f + sq * 0.14f, fitScale)
+        drawer.computeSkin(pose, lk.body)
         drawer.queueParts(lk, if (mode == MenuMode.SPLASH || mode == MenuMode.ONBOARD_STYLE || waveT > 0f) Expression.JOY else Expression.HAPPY, blinkAt(), 1f)
         if (res.beginShadowPass()) {
             res.shadow.update(rig.sunDir[0], rig.sunDir[1], rig.sunDir[2], 0f, 0.6f, 0f, 4f)
             scenery.draw()
             for (b in res.meshes.allBatches()) b.draw()
             CharacterPass.beginSkinDepth(res)
-            drawer.drawBodyDepth(res.skinDepth)
+            drawer.drawBodyDepth(res.skinDepth, lk)
             res.endShadowPass()
         }
         GLES30.glViewport(0, 0, res.width, res.height)
@@ -190,6 +220,27 @@ class MenuScene(private val res: RenderResources, world: World, time: TimeOfDay)
         res.bill.draw()
         GLES30.glDepthMask(true)
         GLES30.glDisable(GLES30.GL_BLEND)
+    }
+
+    /** Water thrown up around the stage's rim, a puff at the feet and a few sparkles. */
+    private fun splashBurst() {
+        val rng = particles.rng
+        for (i in 0 until 46) {
+            val a = rng.range(0f, TAU)
+            val r = rng.range(1.6f, 2.0f)
+            val out = rng.range(1.6f, 3.6f)
+            particles.emit(cos(a) * r, 0.6f, sin(a) * r, cos(a) * out, rng.range(4.5f, 7.5f), sin(a) * out, rng.range(0.7f, 1.1f), 0.2f, 0.08f,
+                if (i % 3 == 0) 0xFFFFFFFF.toInt() else 0xEECFF3FF.toInt(), ParticleAtlas.DROP, gravity = 13f)
+        }
+        for (i in 0 until 10) {
+            val a = TAU * i / 10f
+            particles.emit(cos(a) * 0.3f, 0.65f, sin(a) * 0.3f, cos(a) * 2.2f, 0.4f, sin(a) * 2.2f, 0.45f, 0.35f, 0.6f, 0xDDFFFFFF.toInt(), ParticleAtlas.PUFF, gravity = 0f)
+        }
+        for (i in 0 until 14) {
+            val a = rng.range(0f, TAU)
+            particles.emit(cos(a) * 0.6f, rng.range(1.0f, 2.0f), sin(a) * 0.6f, cos(a) * 1.5f, rng.range(1.5f, 3f), sin(a) * 1.5f, 0.8f, 0.22f, 0.05f,
+                intArrayOf(0xFFFFD23F.toInt(), 0xFFFF5FA8.toInt(), 0xFF7BE36B.toInt(), 0xFF2E9BFF.toInt())[i % 4], ParticleAtlas.SPARKLE, gravity = 2f)
+        }
     }
 
     private fun blinkAt(): Float { val k = (t % 3.3f); return if (k < 0.12f) 1f - k / 0.12f else 0f }

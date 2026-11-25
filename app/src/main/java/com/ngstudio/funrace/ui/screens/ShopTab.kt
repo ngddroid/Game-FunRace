@@ -60,7 +60,7 @@ import com.ngstudio.funrace.ui.components.pressable
 import com.ngstudio.funrace.ui.theme.Palette
 import com.ngstudio.funrace.ui.theme.Type
 
-private enum class ShopCat(val label: String, val icon: Int) { CHARS("Dashlings", R.drawable.ui_character), HATS("Hats", R.drawable.ui_hat), TRAILS("Trails", R.drawable.ui_trail), DANCES("Dances", R.drawable.ui_dance) }
+private enum class ShopCat(val label: String, val icon: Int) { CHARS("Racers", R.drawable.ui_character), HATS("Hats", R.drawable.ui_hat), TRAILS("Trails", R.drawable.ui_trail), DANCES("Dances", R.drawable.ui_dance) }
 
 private class ShopItem(val key: String, val name: String, val rarity: Rarity, val price: Int, val currency: Currency, val color: Int, val color2: Int, val icon: Int)
 

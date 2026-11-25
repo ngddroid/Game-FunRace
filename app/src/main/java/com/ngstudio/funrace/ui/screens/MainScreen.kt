@@ -1,6 +1,9 @@
 package com.ngstudio.funrace.ui.screens
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -53,7 +56,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
@@ -84,6 +86,7 @@ import com.ngstudio.funrace.ui.components.pressable
 import com.ngstudio.funrace.ui.theme.Palette
 import com.ngstudio.funrace.ui.theme.Type
 import kotlinx.coroutines.launch
+import kotlin.math.min
 import kotlin.math.sin
 
 @Composable
@@ -136,6 +139,18 @@ fun TopBar() {
 @Composable
 fun Avatar(characterId: String, size: Dp) {
     val ch = Catalog.character(characterId)
+    val hair = ch.accessories.firstOrNull { it.mesh.startsWith("hair_") }
+    if (ch.body == Catalog.BODY_HUMAN && hair != null) {
+        // kid racer: shirt-coloured badge, hair cap over a skin-tone face
+        Box(Modifier.size(size).clip(CircleShape).background(Color(0xFF000000.toInt() or ch.primary)).border(3.dp, Palette.Ink, CircleShape), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(size * 0.66f).offset(y = size * 0.02f).clip(CircleShape).background(Color(0xFF000000.toInt() or hair.color)), contentAlignment = Alignment.BottomCenter) {
+                Box(Modifier.size(size * 0.54f).offset(y = size * 0.03f).clip(CircleShape).background(Color(0xFF000000.toInt() or ch.skin)), contentAlignment = Alignment.Center) {
+                    Row { Box(Modifier.size(size * 0.07f, size * 0.1f).clip(CircleShape).background(Palette.Ink)); Spacer(Modifier.width(size * 0.1f)); Box(Modifier.size(size * 0.07f, size * 0.1f).clip(CircleShape).background(Palette.Ink)) }
+                }
+            }
+        }
+        return
+    }
     Box(Modifier.size(size).clip(CircleShape).background(Color(0xFF000000.toInt() or ch.primary)).border(3.dp, Palette.Ink, CircleShape), contentAlignment = Alignment.Center) {
         Box(Modifier.size(size * 0.58f).offset(y = size * 0.04f).clip(CircleShape).background(Color(0xFF000000.toInt() or ch.skin)).border(2.dp, Color(0xFF000000.toInt() or ch.secondary), CircleShape), contentAlignment = Alignment.Center) {
             Row { Box(Modifier.size(size * 0.07f, size * 0.1f).clip(CircleShape).background(Palette.Ink)); Spacer(Modifier.width(size * 0.1f)); Box(Modifier.size(size * 0.07f, size * 0.1f).clip(CircleShape).background(Palette.Ink)) }
@@ -228,7 +243,7 @@ fun HomeTab() {
             Row { for (k in 1..3) UiIcon(if (d.progress.starsFor(level) >= k) R.drawable.ui_star else R.drawable.ui_star_empty, 26.dp) }
             Spacer(Modifier.height(10.dp))
             // boosters
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (b in GameRules.boosters) {
                     val owned = d.progress.boosters[b.id] ?: 0
                     val on = b.id in nav.boosters
@@ -257,17 +272,27 @@ private fun BoosterChip(icon: String, name: String, owned: Int, price: Int, on: 
     @Suppress("DiscouragedApi") val res = ctx.resources.getIdentifier(icon, "drawable", ctx.packageName)
     val s by animateFloatAsState(if (on) 1.12f else 1f, spring(dampingRatio = 0.45f), label = "boost")
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.pressable(onClick = onClick)) {
-        Box(
-            Modifier.size(58.dp).scale(s).clip(RoundedCornerShape(18.dp)).background(if (on) Palette.Sun else Color(0x990B2740))
-                .border(3.dp, if (on) Palette.Ink else Color(0x88FFFFFF), RoundedCornerShape(18.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (res != 0) UiIcon(res, 44.dp)
-            Box(Modifier.align(Alignment.BottomEnd).offset(x = 4.dp, y = 4.dp).clip(RoundedCornerShape(8.dp)).background(if (owned > 0) Palette.Lime else Palette.Ocean).border(2.dp, Palette.Ink, RoundedCornerShape(8.dp)).padding(horizontal = 5.dp)) {
-                OutlinedText(if (owned > 0) "x$owned" else "$price", style = Type.Small, outlineWidth = 2.dp)
+        // the tile is clipped to its rounded shape; the count/price sticker and the tick sit on an
+        // outer box so they are never cut off
+        Box(Modifier.size(72.dp, 68.dp)) {
+            Box(
+                Modifier.align(Alignment.TopCenter).size(58.dp).scale(s).clip(RoundedCornerShape(18.dp)).background(if (on) Palette.Sun else Color(0x990B2740))
+                    .border(3.dp, if (on) Palette.Ink else Color(0x88FFFFFF), RoundedCornerShape(18.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (res != 0) UiIcon(res, 44.dp)
             }
-            if (on) Box(Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp)) { UiIcon(R.drawable.ui_check, 22.dp) }
+            Row(
+                Modifier.align(Alignment.BottomEnd).clip(RoundedCornerShape(10.dp)).background(if (owned > 0) Palette.LimeDeep else Palette.OceanDeep)
+                    .border(2.dp, Palette.Ink, RoundedCornerShape(10.dp)).padding(start = if (owned > 0) 7.dp else 3.dp, end = 7.dp, top = 1.dp, bottom = 1.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (owned <= 0) { UiIcon(R.drawable.ui_coin, 15.dp); Spacer(Modifier.width(2.dp)) }
+                OutlinedText(if (owned > 0) "x$owned" else "$price", style = Type.Small.copy(fontSize = 13.sp), outlineWidth = 2.dp)
+            }
+            if (on) Box(Modifier.align(Alignment.TopEnd)) { UiIcon(R.drawable.ui_check, 22.dp) }
         }
+        Spacer(Modifier.height(2.dp))
         OutlinedText(name, style = Type.Small.copy(fontSize = 10.sp), outlineWidth = 2.dp)
     }
 }
@@ -282,76 +307,186 @@ fun LevelsTab() {
     val scope = rememberCoroutineScope()
     var locked by remember { mutableStateOf<Int?>(null) }
     val current = d.progress.highestUnlocked
-    LaunchedEffect(Unit) { state.scrollToItem((current - 3).coerceAtLeast(0)) }
-    GameBackground {
-        LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 120.dp, bottom = 130.dp)) {
+    // the tower climbs upward (level 1 at the bottom): open with your floor just above the menu bar
+    LaunchedEffect(Unit) { state.scrollToItem((current - 2).coerceAtLeast(0)) }
+    // the floor in the middle of the screen picks the world for the sky colour and the header
+    val shown by remember { derivedStateOf { (state.firstVisibleItemIndex + 4).coerceIn(1, LevelRepository.MAX_LEVEL) } }
+    val world = LevelRepository.world(shown)
+    // the world's own sky, pulled toward the game's blue so pale skies still read as sky behind white clouds
+    val skyTop by animateColorAsState(lerpColor(Color(0xFF000000.toInt() or world.skyTop), Color(0xFF2E9BFF), 0.2f), tween(600), label = "skyTop")
+    val skyLow by animateColorAsState(lerpColor(Color(0xFF000000.toInt() or world.skyHorizon), Color(0xFF6CC7F5), 0.45f), tween(600), label = "skyLow")
+    // the jump-to-my-floor button only shows when your floor is off screen
+    val showJump by remember { derivedStateOf { state.layoutInfo.visibleItemsInfo.none { it.index == current - 1 } } }
+    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(skyTop, skyLow)))) {
+        LazyColumn(
+            state = state,
+            reverseLayout = true,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = 170.dp, bottom = 118.dp),
+        ) {
             items(LevelRepository.MAX_LEVEL, key = { it }) { i ->
                 val lv = i + 1
                 Column {
-                    if ((lv - 1) % 25 == 0) WorldBanner(lv)
-                    LevelNode(lv, d.progress.isUnlocked(lv), lv == current, d.progress.starsFor(lv)) {
+                    TowerFloor(lv, d.progress.isUnlocked(lv), lv == current, d.progress.starsFor(lv), d.profile.character) {
                         if (d.progress.isUnlocked(lv)) nav.startRace(RaceRequest(lv)) else locked = lv
                     }
+                    // each world starts with a gate you climb through
+                    if ((lv - 1) % 25 == 0) WorldGate(lv)
                 }
             }
         }
-        Box(Modifier.fillMaxSize().navigationBarsPadding().padding(bottom = 110.dp, end = 14.dp), contentAlignment = Alignment.BottomEnd) {
-            GameButton("", { scope.launch { state.animateScrollToItem((current - 3).coerceAtLeast(0)) } }, Modifier.width(64.dp), colors = Buttons.Sun, icon = R.drawable.ui_flag, height = 50.dp)
+        TowerHeader(shown, current, { d.progress.starsFor(it) }, Modifier.align(Alignment.TopCenter))
+        if (showJump) Box(Modifier.fillMaxSize().navigationBarsPadding().padding(bottom = 110.dp, end = 14.dp), contentAlignment = Alignment.BottomEnd) {
+            GameButton("", { scope.launch { state.animateScrollToItem((current - 2).coerceAtLeast(0)) } }, Modifier.width(64.dp), colors = Buttons.Sun, icon = R.drawable.ui_flag, height = 50.dp)
         }
     }
     locked?.let { lv -> LockedLevelDialog(lv, d.progress.highestUnlocked, { locked = null }, { locked = null; nav.startRace(RaceRequest(it)) }, { locked = null; nav.startRace(RaceRequest(it)) }) }
 }
 
+/** Sticky header under the top bar: the world in view, your floor in it and its stars. */
 @Composable
-private fun WorldBanner(level: Int) {
-    val w = LevelRepository.world(level)
-    Box(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
+private fun TowerHeader(shown: Int, current: Int, starsOf: (Int) -> Int, modifier: Modifier) {
+    val w = LevelRepository.world(shown)
+    val first = (shown - 1) / 25 * 25 + 1
+    val last = min(first + 24, LevelRepository.MAX_LEVEL)
+    val stars = (first..last).sumOf { starsOf(it) }
+    val done = (first..last).count { it < current }
+    Box(modifier.fillMaxWidth().statusBarsPadding().padding(top = 62.dp, start = 14.dp, end = 14.dp)) {
         GlassPanel(Modifier.fillMaxWidth(), padding = 10.dp) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(36.dp).clip(CircleShape).background(Color(0xFF000000.toInt() or w.hazA)).border(3.dp, Palette.Ink, CircleShape))
+                Box(Modifier.size(30.dp).clip(CircleShape).background(Color(0xFF000000.toInt() or w.hazA)).border(3.dp, Palette.Ink, CircleShape))
                 Spacer(Modifier.width(10.dp))
-                Column {
-                    OutlinedText(w.title, style = Type.Heading, outlineWidth = 3.dp)
-                    BodyText("Levels $level–${level + 24}", color = Color.White, style = Type.BodySmall)
+                Column(Modifier.weight(1f)) {
+                    OutlinedText(w.title, style = Type.Label, outlineWidth = 3.dp, align = TextAlign.Start)
+                    BodyText(if (current in first..last) "Floor ${current - first + 1} of ${last - first + 1}" else "Levels $first–$last", color = Color.White, style = Type.BodySmall)
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        UiIcon(R.drawable.ui_star, 18.dp)
+                        Spacer(Modifier.width(4.dp))
+                        OutlinedText("$stars/${(last - first + 1) * 3}", style = Type.Small, outlineWidth = 2.dp)
+                    }
+                    Spacer(Modifier.height(5.dp))
+                    Box(Modifier.width(86.dp).height(8.dp).clip(RoundedCornerShape(4.dp)).background(Color(0x55FFFFFF))) {
+                        Box(Modifier.fillMaxHeight().fillMaxWidth(done / (last - first + 1f)).clip(RoundedCornerShape(4.dp)).background(Palette.Lime))
+                    }
                 }
             }
         }
     }
 }
 
+private val FLOOR_H = 84.dp
+private val SLAB_TOP = 40.dp
+private val SLAB_H = 32.dp
+
+/** Wooden ladder centred on [x] from [y0] down to [y1]; rungs line up across floors. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.ladder(x: Float, y0: Float, y1: Float) {
+    if (y1 <= y0) return
+    val half = 11.dp.toPx()
+    val step = 12.dp.toPx()
+    for (side in floatArrayOf(-1f, 1f)) {
+        drawLine(Palette.Ink, Offset(x + side * half, y0), Offset(x + side * half, y1), strokeWidth = 7.dp.toPx() * 0.75f)
+        drawLine(Color(0xFFC98B55), Offset(x + side * half, y0), Offset(x + side * half, y1), strokeWidth = 3.dp.toPx())
+    }
+    var y = (kotlin.math.ceil(y0 / step) * step)
+    while (y < y1) {
+        drawLine(Palette.Ink, Offset(x - half, y), Offset(x + half, y), strokeWidth = 5.dp.toPx() * 0.8f)
+        drawLine(Color(0xFFE0A86E), Offset(x - half, y), Offset(x + half, y), strokeWidth = 2.dp.toPx())
+        y += step
+    }
+}
+
+/** A soft cloud of three puffs centred on (x, y). */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.cloud(x: Float, y: Float, r: Float) {
+    val c = Color(0xCCFFFFFF)
+    drawCircle(c, r, Offset(x, y))
+    drawCircle(c, r * 0.8f, Offset(x - r * 1.1f, y + r * 0.25f))
+    drawCircle(c, r * 0.75f, Offset(x + r * 1.1f, y + r * 0.3f))
+    drawRoundRect(c, Offset(x - r * 1.8f, y + r * 0.2f), Size(r * 3.6f, r * 0.8f), CornerRadius(r * 0.4f))
+}
+
+/** One floor of the tower: a platform on the left or right (boss floors span the width), ladders to the next and previous floors, and you standing on your current floor. */
 @Composable
-private fun LevelNode(level: Int, unlocked: Boolean, current: Boolean, stars: Int, onClick: () -> Unit) {
+private fun TowerFloor(level: Int, unlocked: Boolean, current: Boolean, stars: Int, character: String, onClick: () -> Unit) {
     val kind = LevelRepository.kind(level)
     val boss = kind == RaceKind.BOSS_TIDE || kind == RaceKind.BOSS_DUCK || kind == RaceKind.BOSS_STORM
     val bonus = kind == RaceKind.BONUS
-    val xFrac = 0.5f + 0.3f * sin(level * 0.9f)
-    val nextX = 0.5f + 0.3f * sin((level + 1) * 0.9f)
-    val size = if (boss) 74.dp else 62.dp
-    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().height(86.dp)) {
+    val left = level % 2 == 1
+    val x0 = if (boss) 0.06f else if (left) 0.06f else 0.42f
+    val x1 = if (boss) 0.94f else if (left) 0.58f else 0.94f
+    val (topC, deepC) = when {
+        !unlocked -> Color(0xFFC3CED8) to Color(0xFF8A9BAA)
+        current -> Color(0xFFA6F58F) to Palette.LimeDeep
+        boss -> Color(0xFFFF9BCB) to Palette.PinkDeep
+        bonus -> Color(0xFFFFE27A) to Palette.SunDeep
+        else -> Color(0xFF8CCBFF) to Palette.OceanDeep
+    }
+    val pulse = if (current) {
+        val inf = rememberInfiniteTransition(label = "floor")
+        inf.animateFloat(1f, 1.06f, infiniteRepeatable(tween(650), RepeatMode.Reverse), label = "fp").value
+    } else 1f
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().height(FLOOR_H)) {
         val w = maxWidth
         Canvas(Modifier.fillMaxSize()) {
-            val x0 = this.size.width * xFrac
-            val x1 = this.size.width * nextX
-            drawLine(Color(0x88FFFFFF), Offset(x0, this.size.height / 2f), Offset(x1, this.size.height * 1.5f), strokeWidth = 8f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 14f)))
+            if (!boss && level % 3 == 0) cloud(size.width * (if (left) 0.8f else 0.2f), 30.dp.toPx(), 13.dp.toPx())
+            val lx = size.width * 0.5f
+            if (level < LevelRepository.MAX_LEVEL) ladder(lx, 0f, (SLAB_TOP + 6.dp).toPx())
+            if (level > 1) ladder(lx, (SLAB_TOP + SLAB_H).toPx(), size.height)
         }
-        val inf = rememberInfiniteTransition(label = "node")
-        val pulse by inf.animateFloat(1f, 1.12f, infiniteRepeatable(tween(650), RepeatMode.Reverse), label = "np")
-        Box(Modifier.offset(x = w * xFrac - size / 2, y = (86.dp - size) / 2).size(size).scale(if (current) pulse else 1f).pressable(onClick = onClick), contentAlignment = Alignment.Center) {
-            val fill = when {
-                !unlocked -> Brush.verticalGradient(listOf(Color(0xFF9DB0C0), Color(0xFF6E8396)))
-                boss -> Brush.verticalGradient(listOf(Color(0xFFFF9BCB), Palette.PinkDeep))
-                bonus -> Brush.verticalGradient(listOf(Color(0xFFFFEA92), Palette.SunDeep))
-                current -> Brush.verticalGradient(listOf(Color(0xFFA6F58F), Palette.LimeDeep))
-                else -> Brush.verticalGradient(listOf(Color(0xFF8CCBFF), Palette.OceanDeep))
+        val shape = RoundedCornerShape(12.dp)
+        Box(Modifier.offset(x = w * x0, y = SLAB_TOP).size(w * (x1 - x0), SLAB_H + 6.dp).scale(pulse).pressable(onClick = onClick)) {
+            Box(Modifier.fillMaxWidth().height(SLAB_H).offset(y = 6.dp).clip(shape).background(deepC).border(3.dp, Palette.Ink, shape))
+            Box(
+                Modifier.fillMaxWidth().height(SLAB_H).clip(shape).background(Brush.verticalGradient(listOf(topC, lerpColor(topC, deepC, 0.35f)))).border(3.dp, Palette.Ink, shape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    when {
+                        !unlocked -> { UiIcon(R.drawable.ui_lock, 20.dp); Spacer(Modifier.width(4.dp)); OutlinedText(if (boss) "Boss $level" else "$level", style = Type.Label, color = Color(0xFFEFF3F6), outlineWidth = 2.dp) }
+                        boss -> { UiIcon(R.drawable.ui_boss, 24.dp); Spacer(Modifier.width(6.dp)); OutlinedText("Boss $level", style = Type.Label, outlineWidth = 3.dp) }
+                        bonus -> { UiIcon(R.drawable.ui_bonus, 22.dp); Spacer(Modifier.width(4.dp)); OutlinedText("$level", style = Type.Label, outlineWidth = 3.dp) }
+                        else -> OutlinedText("$level", style = Type.Label.copy(fontSize = if (level >= 1000) 16.sp else 18.sp), outlineWidth = 3.dp)
+                    }
+                    if (unlocked && !current && stars > 0) {
+                        Spacer(Modifier.width(6.dp))
+                        for (k in 1..3) UiIcon(if (stars >= k) R.drawable.ui_star else R.drawable.ui_star_empty, 14.dp)
+                    }
+                }
             }
-            Box(Modifier.fillMaxSize().shadow(6.dp, CircleShape).clip(CircleShape).background(fill).border(4.dp, Palette.Ink, CircleShape))
-            when {
-                !unlocked -> UiIcon(R.drawable.ui_lock, size * 0.55f)
-                boss -> Column(horizontalAlignment = Alignment.CenterHorizontally) { UiIcon(R.drawable.ui_boss, size * 0.5f); OutlinedText("$level", style = Type.Small, outlineWidth = 2.dp) }
-                bonus -> Column(horizontalAlignment = Alignment.CenterHorizontally) { UiIcon(R.drawable.ui_bonus, size * 0.45f); OutlinedText("$level", style = Type.Small, outlineWidth = 2.dp) }
-                else -> OutlinedText("$level", style = Type.Heading.copy(fontSize = if (level >= 1000) 17.sp else 22.sp), outlineWidth = 3.dp)
+        }
+        if (current) {
+            // you, standing on your floor, ready to go
+            val cx = w * (x0 + x1) / 2f
+            Row(Modifier.offset(x = cx - 48.dp, y = SLAB_TOP - 36.dp).pressable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
+                Avatar(character, 34.dp)
+                Spacer(Modifier.width(6.dp))
+                Box(Modifier.clip(RoundedCornerShape(12.dp)).background(Palette.LimeDeep).border(2.dp, Palette.Ink, RoundedCornerShape(12.dp)).padding(horizontal = 10.dp, vertical = 3.dp)) {
+                    OutlinedText("PLAY", style = Type.Small, outlineWidth = 2.dp)
+                }
             }
-            if (unlocked && stars > 0) Row(Modifier.align(Alignment.BottomCenter).offset(y = 12.dp)) { for (k in 1..3) UiIcon(if (stars >= k) R.drawable.ui_star else R.drawable.ui_star_empty, 18.dp) }
+        }
+    }
+}
+
+private fun lerpColor(a: Color, b: Color, t: Float) = Color(a.red + (b.red - a.red) * t, a.green + (b.green - a.green) * t, a.blue + (b.blue - a.blue) * t, 1f)
+
+/** Coloured band below a world's first floor: the world you climb into next. */
+@Composable
+private fun WorldGate(level: Int) {
+    val w = LevelRepository.world(level)
+    Box(Modifier.fillMaxWidth().height(62.dp)) {
+        Canvas(Modifier.fillMaxSize()) { if (level > 1) ladder(size.width * 0.5f, 0f, size.height) }
+        val shape = RoundedCornerShape(14.dp)
+        Box(
+            Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 10.dp).height(46.dp).clip(shape)
+                .background(Color(0xFF000000.toInt() or w.hazA)).border(3.dp, Palette.Ink, shape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                OutlinedText(w.title, style = Type.Label, outlineWidth = 3.dp)
+                OutlinedText("Levels $level–${min(level + 24, LevelRepository.MAX_LEVEL)}", style = Type.Small, outlineWidth = 2.dp)
+            }
         }
     }
 }

@@ -2,8 +2,12 @@
 Composes launcher icons, splash icon, Play icon and the feature graphic from the Blender renders.
 
     python3 tools/make_icons.py <render_dir>
+    python3 tools/make_icons.py --splash <avatar.png>   # launch-screen icon only
 
-Inputs (from tools/blender/render_icon.py): <render_dir>/icon_fg.png, <render_dir>/hero.png
+Inputs (from tools/blender/render_icon.py): <render_dir>/icon_fg.png, <render_dir>/hero.png.
+The launch screen shows the default racer (Kai), rendered with
+tools/blender/preview_avatars.py in portrait mode; put it in <render_dir>/splash_avatar.png
+so a full rebuild keeps it.
 """
 import math
 import os
@@ -126,8 +130,12 @@ def main():
         p = os.path.join(RES, stale)
         if os.path.exists(p):
             os.remove(p)
-    # splash icon (inside the system splash circle)
-    place(432, subj, 0.6, 0.02).save(os.path.join(RES, "drawable-nodpi", "splash_icon.png"))
+    # splash icon (inside the system splash circle): the default racer when rendered, else the mascot
+    sp = os.path.join(SRC, "splash_avatar.png")
+    if os.path.exists(sp):
+        splash(sp)
+    else:
+        place(432, subj, 0.6, 0.02).save(os.path.join(RES, "drawable-nodpi", "splash_icon.png"))
     # Play icon 512 (full bleed; Play rounds it)
     os.makedirs(STORE, exist_ok=True)
     p = background(512)
@@ -135,6 +143,50 @@ def main():
     p.convert("RGB").save(os.path.join(STORE, "play_icon_512.png"))
     feature_graphic()
     print("icons written")
+
+
+# hop cycle for the animated launch icon: (lift px at 432, squash-y, ripple 0..1), ~90 ms per frame
+HOP = [(0, 0.86, 0.0), (8, 1.08, 0.0), (26, 1.02, 0.0), (34, 1.0, 0.0), (26, 1.0, 0.0), (9, 1.06, 0.0), (0, 0.84, 0.35), (0, 0.96, 0.75)]
+HOP_MS = 110
+# exactly two hops, then crouch ready to jump (the app's exit animation is the third jump that flies
+# away; MainActivity.LAUNCH_HOPS_MS must equal HOPS * len(HOP) * HOP_MS)
+HOPS = 2
+READY = (0, 0.86, 0.0)
+STAND = (0, 1.0, 0.0)
+
+
+def splash(avatar_png):
+    """Launch-screen icon: the default racer hopping on the spot (an AnimationDrawable the system
+    plays while the app starts), drawn small enough to stay inside the system's circle mask."""
+    subj = subject(avatar_png)
+    S = 432
+    fh = int(S * 0.47)
+    k = fh / subj.size[1]
+    fig = subj.resize((max(1, int(subj.size[0] * k)), fh), Image.LANCZOS)
+    feet = int(S * 0.735)
+    out = os.path.join(RES, "drawable-nodpi")
+    for i, (lift, sy, rip) in enumerate(HOP + [READY, STAND]):
+        c = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+        d = ImageDraw.Draw(c)
+        # soft shadow shrinks as the racer rises; a ripple ring spreads on landing
+        sw = int(fig.size[0] * (0.62 - lift / 120))
+        d.ellipse([S // 2 - sw // 2, feet - 7, S // 2 + sw // 2, feet + 7], fill=(10, 60, 110, 70))
+        if rip > 0:
+            rw = int(fig.size[0] * (0.55 + rip * 0.55))
+            d.ellipse([S // 2 - rw // 2, feet - 6 - int(rip * 4), S // 2 + rw // 2, feet + 6 + int(rip * 4)], outline=(255, 255, 255, int(220 * (1 - rip * 0.6))), width=4)
+        sx = 1.0 + (1.0 - sy) * 0.6
+        w, h = max(1, int(fig.size[0] * sx)), max(1, int(fig.size[1] * sy))
+        im = fig.resize((w, h), Image.LANCZOS)
+        c.alpha_composite(im, (S // 2 - w // 2, feet - h - lift))
+        c.save(os.path.join(out, "splash_icon_%d.png" % i))
+        if i == len(HOP) + 1:
+            os.replace(os.path.join(out, "splash_icon_%d.png" % i), os.path.join(out, "splash_icon.png"))  # still (older Android)
+    items = "".join('    <item android:drawable="@drawable/splash_icon_%d" android:duration="%d" />\n' % (i, HOP_MS) for _ in range(HOPS) for i in range(len(HOP)))
+    items += '    <item android:drawable="@drawable/splash_icon_%d" android:duration="10000" />\n' % len(HOP)
+    xml = ('<?xml version="1.0" encoding="utf-8"?>\n<animation-list xmlns:android="http://schemas.android.com/apk/res/android" android:oneshot="true">\n'
+           + items + '</animation-list>\n')
+    open(os.path.join(ROOT, "app", "src", "main", "res", "drawable", "splash_icon_anim.xml"), "w").write(xml)
+    print("splash icon: %d hops of %d frames, then crouched, ready to jump" % (HOPS, len(HOP)))
 
 
 def feature_graphic():
@@ -173,9 +225,14 @@ def feature_graphic():
     word("SPLASH", 70, 120, (255, 244, 168), (255, 158, 46))
     word("DASH", 190, 150, (184, 255, 248), (46, 155, 255))
     f = ImageFont.truetype(font_path, 34)
-    d.rounded_rectangle([60, 372, 380, 420], radius=16, fill=(255, 107, 87), outline=INK, width=4)
-    d.text((80, 376), "OBSTACLE PARTY", font=f, fill=(255, 255, 255), stroke_width=3, stroke_fill=INK)
+    ribbon = "OBSTACLE RACE 3D"  # matches the Play title "Splash Dash: Obstacle Race 3D"
+    right = max(380, 80 + d.textbbox((0, 0), ribbon, font=f, stroke_width=3)[2] + 20)
+    d.rounded_rectangle([60, 372, right, 420], radius=16, fill=(255, 107, 87), outline=INK, width=4)
+    d.text((80, 376), ribbon, font=f, fill=(255, 255, 255), stroke_width=3, stroke_fill=INK)
     bg.convert("RGB").save(os.path.join(STORE, "feature_graphic_1024x500.png"))
 
 
-main()
+if sys.argv[1] == "--splash":
+    splash(sys.argv[2])
+else:
+    main()

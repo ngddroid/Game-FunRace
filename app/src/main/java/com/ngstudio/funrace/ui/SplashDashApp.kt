@@ -37,7 +37,14 @@ import androidx.compose.ui.unit.dp
 import com.ngstudio.funrace.ads.MockAdProvider
 import com.ngstudio.funrace.app.AppContainer
 import com.ngstudio.funrace.audio.Music
+import com.ngstudio.funrace.BuildConfig
+import com.ngstudio.funrace.game.render.LaunchCurtain
 import com.ngstudio.funrace.game.render.MenuMode
+import com.ngstudio.funrace.ui.screens.StudioIntroScreen
+import androidx.compose.runtime.collectAsState
+import com.ngstudio.funrace.services.GameEvents
+import com.ngstudio.funrace.services.InAppUpdates
+import com.ngstudio.funrace.ui.screens.ServicePrompts
 import com.ngstudio.funrace.ui.components.LocalContainer
 import com.ngstudio.funrace.ui.components.OutlinedText
 import com.ngstudio.funrace.ui.screens.LegalDoc
@@ -57,6 +64,8 @@ enum class PlayMode { CAMPAIGN, DAILY, TIME_TRIAL }
 data class RaceRequest(val level: Int, val mode: PlayMode = PlayMode.CAMPAIGN, val boosters: Set<String> = emptySet())
 
 sealed class Screen {
+    /** NG Studio intro, on every cold start. */
+    data object Studio : Screen()
     data object Splash : Screen()
     data object Onboarding : Screen()
     data object Main : Screen()
@@ -73,8 +82,8 @@ object LaunchOptions {
     var autopilot = false
 }
 
-class AppNav {
-    val stack = mutableStateListOf<Screen>(Screen.Splash)
+class AppNav(first: Screen = Screen.Splash) {
+    val stack = mutableStateListOf(first)
     var tab by mutableStateOf(Tab.HOME)
     var toast by mutableStateOf<String?>(null)
     var toastId by mutableIntStateOf(0)
@@ -96,15 +105,29 @@ class AppNav {
 val LocalNav = staticCompositionLocalOf<AppNav> { error("No nav") }
 
 @Composable
-fun SplashDashApp(c: AppContainer, activity: Activity) {
-    val nav = remember { AppNav() }
+fun SplashDashApp(c: AppContainer, activity: Activity, updates: InAppUpdates? = null) {
+    // the studio intro opens a cold start (not a recreated activity, nor a debug auto-race launch)
+    val nav = remember {
+        val intro = LaunchCurtain.down.value && !(BuildConfig.DEBUG && LaunchOptions.autoLevel > 0)
+        if (!intro) LaunchCurtain.lift()
+        AppNav(if (intro) Screen.Studio else Screen.Splash)
+    }
     CompositionLocalProvider(LocalContainer provides c, LocalNav provides nav) {
         val top = nav.top
         LaunchedEffect(top, nav.tab) {
+            GameEvents.screen(screenName(top, nav.tab))
             when (top) {
-                Screen.Splash -> { c.stage.showMenu(MenuMode.SPLASH); c.stage.playMusic(Music.MENU) }
+                // the splash scene renders (racer waiting up in the sky) behind the white intro
+                Screen.Studio -> c.stage.showMenu(MenuMode.SPLASH)
+                Screen.Splash -> {
+                    c.stage.showMenu(MenuMode.SPLASH)
+                    c.stage.playMusic(Music.MENU)
+                    // after the intro: let its white fade out first, then the racer drops and the logo lands
+                    if (LaunchCurtain.down.value) { delay(400); LaunchCurtain.lift() }
+                }
                 Screen.Onboarding -> c.stage.playMusic(Music.MENU)
                 Screen.Main -> {
+                    updates?.check()
                     c.stage.playMusic(Music.MENU)
                     when (nav.tab) {
                         Tab.HOME -> c.stage.showMenu(MenuMode.HOME)
@@ -125,6 +148,13 @@ fun SplashDashApp(c: AppContainer, activity: Activity) {
                 contentKey = { s -> if (s is Screen.Race) "race${s.nonce}" else s.toString() },
             ) { screen ->
                 when (screen) {
+                    Screen.Studio -> {
+                        val systemSplash by LaunchCurtain.systemSplash.collectAsState()
+                        // in case the system launch screen never reports leaving
+                        var waited by remember { mutableStateOf(false) }
+                        LaunchedEffect(Unit) { delay(3500); waited = true }
+                        StudioIntroScreen(started = !systemSplash || waited) { nav.replaceAll(Screen.Splash) }
+                    }
                     Screen.Splash -> SplashScreen()
                     Screen.Onboarding -> OnboardingScreen()
                     Screen.Main -> MainScreen()
@@ -134,10 +164,22 @@ fun SplashDashApp(c: AppContainer, activity: Activity) {
                 }
             }
             (c.ads as? MockAdProvider)?.let { MockAdOverlay(it) }
+            ServicePrompts(c, updates, onMain = top == Screen.Main)
             ToastHost(nav)
         }
         BackHandler(enabled = nav.stack.size > 1 && top !is Screen.Race && top !is Screen.Onboarding) { c.back(); nav.pop() }
     }
+}
+
+/** Analytics screen names. */
+private fun screenName(s: Screen, tab: Tab): String = when (s) {
+    Screen.Studio -> "studio_intro"
+    Screen.Splash -> "splash"
+    Screen.Onboarding -> "onboarding"
+    Screen.Main -> tab.name.lowercase()
+    Screen.Settings -> "settings"
+    is Screen.Legal -> "legal_" + s.doc.name.lowercase()
+    is Screen.Race -> "race_" + s.request.mode.name.lowercase()
 }
 
 private fun transitionFor(from: Screen, to: Screen): ContentTransform = when {

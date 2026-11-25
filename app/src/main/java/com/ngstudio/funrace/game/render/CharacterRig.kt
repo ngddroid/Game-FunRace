@@ -7,6 +7,7 @@ import com.ngstudio.funrace.core.Quat
 import com.ngstudio.funrace.core.TAU
 import com.ngstudio.funrace.core.clamp01
 import com.ngstudio.funrace.data.Bones
+import com.ngstudio.funrace.data.Catalog
 import com.ngstudio.funrace.data.CharacterDef
 import com.ngstudio.funrace.data.HatDef
 import kotlin.math.abs
@@ -268,10 +269,11 @@ object Anim {
                 out[0] = abs(s(t * 4f)) * 0.06f
             }
             "cheer" -> {
+                // arms pump up in a V, a touch behind the head, so the hands never cover the face
                 val pump = abs(s(t * 6f))
-                p.rot(Bones.ARM_L, -0.3f, 0f, 2.2f + pump * 0.5f); p.rot(Bones.ARM_R, -0.3f, 0f, -2.2f - pump * 0.5f)
-                p.rot(Bones.HAND_L, -0.6f * pump); p.rot(Bones.HAND_R, -0.6f * pump)
-                p.rot(Bones.HEAD, -0.2f)
+                p.rot(Bones.ARM_L, 0.15f, 0f, 1.9f + pump * 0.35f); p.rot(Bones.ARM_R, 0.15f, 0f, -1.9f - pump * 0.35f)
+                p.rot(Bones.HAND_L, 0f, 0f, 0.35f * pump); p.rot(Bones.HAND_R, 0f, 0f, -0.35f * pump)
+                p.rot(Bones.HEAD, -0.15f)
                 p.rot(Bones.THIGH_L, -0.1f, 0f, 0.15f); p.rot(Bones.THIGH_R, -0.1f, 0f, -0.15f)
                 out[0] = pump * 0.18f
             }
@@ -357,17 +359,44 @@ object Anim {
 /** A rigid part attached to a bone (authored in rest-pose model space). */
 class LookPart(val mesh: String, val bone: Int, val color: Int, val color2: Int)
 
+/**
+ * How a skinned body is fitted: its skeleton comes from its own mesh; head parts (face, hats, hair)
+ * are authored on the Dashling head and mapped onto this body's head by [headFit]; whole-body pose
+ * offsets (crouch, bob) scale with leg length by [rootScale].
+ */
+class BodySpec(val mesh: String, val headFit: FloatArray?, val rootScale: Float)
+
+object Bodies {
+    val DASHLING = BodySpec(Catalog.BODY_DASHLING, null, 1f)
+
+    /** Dashling head (centre y 1.0, r 0.33) -> human head (centre y 1.235, r ~0.2). Must match m_kids.py. */
+    val HUMAN = BodySpec(Catalog.BODY_HUMAN, fit(0f, 1f, 0f, 0f, 1.235f, 0f, 0.606f, 0.636f, 0.59f), 0.62f / 0.42f)
+
+    fun of(mesh: String): BodySpec = if (mesh == HUMAN.mesh) HUMAN else DASHLING
+
+    /** T(dst) * S(s) * T(-src), column-major. */
+    private fun fit(sx0: Float, sy0: Float, sz0: Float, dx: Float, dy: Float, dz: Float, kx: Float, ky: Float, kz: Float): FloatArray {
+        val m = FloatArray(16)
+        m[0] = kx; m[5] = ky; m[10] = kz; m[15] = 1f
+        m[12] = dx - kx * sx0; m[13] = dy - ky * sy0; m[14] = dz - kz * sz0
+        return m
+    }
+}
+
 /** Everything that defines how one Dashling looks (resolved from the catalog). */
 class Look(
     val primary: Int, val secondary: Int, val skin: Int, val shoe: Int,
     val accessories: List<LookPart>,
     val hat: LookPart?,
+    /** Skinned body mesh (all bodies share the Dashling skeleton). */
+    val body: String = Catalog.BODY_DASHLING,
 ) {
     companion object {
         fun of(c: CharacterDef, h: HatDef?): Look = Look(
             c.primary, c.secondary, c.skin, c.shoe,
             c.accessories.map { LookPart(it.mesh, it.bone, it.color, it.color2) },
             if (h == null || h.mesh.isEmpty()) null else LookPart(h.mesh, Bones.HEAD, h.color, h.color2),
+            c.body,
         )
     }
 }
@@ -377,9 +406,8 @@ class Look(
  * body (with inverted-hull outline), costume accessories, hat and an expressive face.
  */
 class CharacterDrawer(private val res: RenderResources) {
-    private val model = ModelLibrary.get("dashling")
-    val bones = model.bones
-    private val body: Mesh = res.meshes.mesh("dashling")
+    private var spec = Bodies.DASHLING
+    private var bones = ModelLibrary.get(Catalog.BODY_DASHLING).bones
     private val boneCount = Bones.COUNT
     private val global = FloatArray(boneCount * 16)
     val skinMats = FloatArray(boneCount * 16)
@@ -406,14 +434,17 @@ class CharacterDrawer(private val res: RenderResources) {
         Mat4.trs(modelM, 0, x, y, z, q[0], q[1], q[2], q[3], sx * scale, sy * scale, sz * scale)
     }
 
-    /** Computes skinning matrices (model space) from [pose]. */
-    fun computeSkin(pose: Pose) {
+    /** Computes skinning matrices (model space) from [pose] for the skeleton of [body]. */
+    fun computeSkin(pose: Pose, body: String = Catalog.BODY_DASHLING) {
+        spec = Bodies.of(body)
+        bones = ModelLibrary.get(spec.mesh).bones
+        val rs = spec.rootScale
         if (bones.size < boneCount) { for (i in 0 until boneCount) Mat4.identity(tmp).also { System.arraycopy(tmp, 0, skinMats, i * 16, 16) }; return }
         for (i in 0 until boneCount) {
             val b = bones[i]
             val o = i * 4
             if (b.parent < 0) {
-                Mat4.trs(local, 0, b.hx + pose.ox, b.hy + pose.oy, b.hz + pose.oz, pose.q[o], pose.q[o + 1], pose.q[o + 2], pose.q[o + 3], 1f, 1f, 1f)
+                Mat4.trs(local, 0, b.hx + pose.ox * rs, b.hy + pose.oy * rs, b.hz + pose.oz * rs, pose.q[o], pose.q[o + 1], pose.q[o + 2], pose.q[o + 3], 1f, 1f, 1f)
                 System.arraycopy(local, 0, global, i * 16, 16)
             } else {
                 val p = bones[b.parent]
@@ -438,10 +469,27 @@ class CharacterDrawer(private val res: RenderResources) {
         }
     }
 
+    private val fitTmp = FloatArray(16)
+    private val boneTmp = FloatArray(16)
+
+    /** World position of bone [b]'s joint in the current pose (after [setModel] + [computeSkin]). */
+    fun boneWorld(b: Int, out: FloatArray) {
+        System.arraycopy(skinMats, b * 16, tmp, 0, 16)
+        mulInto(boneTmp, 0, modelM, tmp)
+        val bn = bones[b]
+        out[0] = boneTmp[0] * bn.hx + boneTmp[4] * bn.hy + boneTmp[8] * bn.hz + boneTmp[12]
+        out[1] = boneTmp[1] * bn.hx + boneTmp[5] * bn.hy + boneTmp[9] * bn.hz + boneTmp[13]
+        out[2] = boneTmp[2] * bn.hx + boneTmp[6] * bn.hy + boneTmp[10] * bn.hz + boneTmp[14]
+    }
+
     /** World matrix of a rigidly attached part on bone [b] (authored in rest-pose model space). */
     fun attachMatrix(b: Int, out: FloatArray) {
         System.arraycopy(skinMats, b * 16, tmp, 0, 16)
-        mulInto(out, 0, modelM, tmp)
+        val fit = if (b == Bones.HEAD) spec.headFit else null
+        if (fit == null) { mulInto(out, 0, modelM, tmp); return }
+        // head parts are authored on the Dashling head: fit them onto this body's head first
+        mulInto(fitTmp, 0, tmp, fit)
+        mulInto(out, 0, modelM, fitTmp)
     }
 
     private val partM = FloatArray(16)
@@ -507,13 +555,13 @@ class CharacterDrawer(private val res: RenderResources) {
         p.vec3Array("uTints", tints, 5)
         p.f("uFlash", flash)
         p.f("uAlpha", alpha)
-        body.draw()
+        res.meshes.mesh(look.body).draw()
     }
 
-    fun drawBodyDepth(p: ShaderProgram) {
+    fun drawBodyDepth(p: ShaderProgram, look: Look) {
         p.mat4("uModel", modelM)
         p.mat4Array("uBones", skinMats, boneCount)
-        body.draw()
+        res.meshes.mesh(look.body).draw()
     }
 }
 

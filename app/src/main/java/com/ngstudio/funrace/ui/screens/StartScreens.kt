@@ -3,6 +3,8 @@ package com.ngstudio.funrace.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -65,6 +67,7 @@ import com.ngstudio.funrace.ads.MockAdProvider
 import com.ngstudio.funrace.audio.Sfx
 import com.ngstudio.funrace.data.Catalog
 import com.ngstudio.funrace.data.Progression
+import com.ngstudio.funrace.game.render.LaunchCurtain
 import com.ngstudio.funrace.game.render.MenuMode
 import com.ngstudio.funrace.ui.LaunchOptions
 import com.ngstudio.funrace.ui.LocalNav
@@ -85,6 +88,8 @@ import com.ngstudio.funrace.ui.components.pressable
 import com.ngstudio.funrace.ui.theme.Palette
 import com.ngstudio.funrace.ui.theme.Type
 import kotlinx.coroutines.delay
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.sin
 
 /** The game's wordmark: chunky gradient letters with a wave underline. */
@@ -98,7 +103,7 @@ fun Logo(modifier: Modifier = Modifier, scale: Float = 1f) {
         OutlinedText("DASH", style = Type.Huge.copy(fontSize = 76.sp, letterSpacing = 3.sp), outlineWidth = 10.dp, modifier = Modifier.offset(y = (-18).dp),
             brush = Brush.verticalGradient(listOf(Color(0xFFB8FFF8), Palette.Lagoon, Palette.Ocean)))
         Box(Modifier.offset(y = (-22).dp).clip(RoundedCornerShape(14.dp)).background(Palette.Coral).border(3.dp, Palette.Ink, RoundedCornerShape(14.dp)).padding(horizontal = 14.dp, vertical = 2.dp)) {
-            OutlinedText("OBSTACLE PARTY", style = Type.Label.copy(fontSize = 16.sp, letterSpacing = 2.sp), outlineWidth = 3.dp)
+            OutlinedText("OBSTACLE RACE 3D", style = Type.Label.copy(fontSize = 16.sp, letterSpacing = 2.sp), outlineWidth = 3.dp)
         }
     }
 }
@@ -110,10 +115,17 @@ fun SplashScreen() {
     val progress by c.loadProgress.collectAsState()
     val ready by (c.stage.renderer?.ready ?: kotlinx.coroutines.flow.MutableStateFlow(true)).collectAsState()
     val drop = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { drop.animateTo(1f, spring(dampingRatio = 0.42f, stiffness = 180f)); c.audio.play(Sfx.GO, 0.6f) }
-    LaunchedEffect(progress, ready) {
-        if (progress >= 1f && ready) {
-            delay(900)
+    val burst = remember { Animatable(0f) }
+    // everything waits for the system launch screen to fly the racer off (never more than 4 s)
+    val curtainDown by LaunchCurtain.down.collectAsState()
+    LaunchedEffect(Unit) { delay(4000); LaunchCurtain.lift() }
+    LaunchedEffect(curtainDown) { if (!curtainDown) { drop.animateTo(1f, spring(dampingRatio = 0.42f, stiffness = 180f)); c.audio.play(Sfx.GO, 0.6f) } }
+    // the logo first touches down ~0.3 s in: throw up a splash of droplets under it
+    LaunchedEffect(curtainDown) { if (!curtainDown) { delay(300); burst.animateTo(1f, tween(850, easing = LinearEasing)) } }
+    LaunchedEffect(progress, ready, curtainDown) {
+        if (progress >= 1f && ready && !curtainDown) {
+            // long enough to see the racer land on the stage and wave hello
+            delay(1500)
             c.save.update { Progression.rollDaily(it) }
             val d = c.save.data
             if (BuildConfig.DEBUG && LaunchOptions.autoLevel > 0) {
@@ -122,16 +134,51 @@ fun SplashScreen() {
             } else nav.replaceAll(if (d.profile.onboardingDone) Screen.Main else Screen.Onboarding)
         }
     }
+    val inf = rememberInfiniteTransition(label = "splash")
+    val bob by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1600, easing = LinearEasing)), label = "bob")
+    val dots by inf.animateFloat(0f, 4f, infiniteRepeatable(tween(1200, easing = LinearEasing)), label = "dots")
+    val twinkle by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1300, easing = LinearEasing)), label = "tw")
+    val done = progress >= 1f && ready
+    val readyPop by animateFloatAsState(if (done) 1f else 0f, spring(dampingRatio = 0.35f, stiffness = 260f), label = "ready")
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x660B2740), Color(0x000B2740), Color(0x000B2740), Color(0xAA0B2740)))))
-        BubblesLayer(count = 16)
+        BubblesLayer(count = 22)
         Column(Modifier.fillMaxSize().statusBarsPadding().padding(top = 60.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Logo(Modifier.graphicsLayer { translationY = (1f - drop.value) * -500f })
+            Box(contentAlignment = Alignment.Center) {
+                // droplets thrown up where the logo lands
+                Canvas(Modifier.matchParentSize()) {
+                    val k = burst.value
+                    if (k <= 0f || k >= 1f) return@Canvas
+                    val cx = size.width / 2f
+                    val cy = size.height * 0.82f
+                    for (i in 0 until 16) {
+                        val a = (-170f + i * 140f / 15f) * (PI.toFloat() / 180f) + sin(i * 2.3f) * 0.06f
+                        val sp = size.width * (0.42f + 0.2f * ((i * 37) % 7) / 6f)
+                        val x = cx + cos(a) * sp * k * (if (i % 2 == 0) 1f else 0.8f)
+                        val y = cy + sin(a) * sp * 0.75f * k + size.height * 1.1f * k * k
+                        drawCircle(if (i % 3 == 0) Color.White.copy(alpha = 1f - k) else Color(0xFFBFF4FF).copy(alpha = (1f - k) * 0.95f), radius = (7f + (i % 3) * 3f) * (1f - k * 0.5f) * density / 2.6f, center = Offset(x, y))
+                    }
+                }
+                Logo(Modifier.graphicsLayer { translationY = (1f - drop.value) * -500f + sin(bob * 2f * PI.toFloat()) * 6f * density })
+                // sparkles twinkling around the wordmark
+                for ((i, pos) in listOf(-120 to -40, 128 to -10, -100 to 70, 110 to 86).withIndex()) {
+                    val ph = (twinkle + i * 0.27f) % 1f
+                    val sc = if (ph < 0.5f) ph * 2f else (1f - ph) * 2f
+                    UiIcon(R.drawable.ui_star, 22.dp, Modifier.offset(x = pos.first.dp, y = pos.second.dp).graphicsLayer { scaleX = sc * drop.value; scaleY = sc * drop.value; rotationZ = ph * 90f }, alpha = sc)
+                }
+            }
         }
         Column(Modifier.fillMaxSize().navigationBarsPadding().padding(32.dp), verticalArrangement = Arrangement.Bottom, horizontalAlignment = Alignment.CenterHorizontally) {
-            OutlinedText(if (progress < 1f) "Pumping up the floaties..." else "Ready!", style = Type.Label, outlineWidth = 3.dp)
-            Spacer(Modifier.height(8.dp))
-            GameProgressBar(progress, Modifier.fillMaxWidth(0.8f), height = 20.dp, fill = Brush.horizontalGradient(listOf(Palette.Sun, Palette.Coral)))
+            if (done) OutlinedText("Ready!", style = Type.Heading, outlineWidth = 4.dp, color = Palette.Sun, modifier = Modifier.graphicsLayer { scaleX = 0.4f + 0.6f * readyPop; scaleY = 0.4f + 0.6f * readyPop })
+            else OutlinedText("Pumping up the floaties" + ".".repeat(dots.toInt().coerceAtMost(3)), style = Type.Label, outlineWidth = 3.dp)
+            Spacer(Modifier.height(14.dp))
+            // a rubber duck rides the front of the loading bar
+            val shown by animateFloatAsState(progress.coerceIn(0f, 1f), tween(450), label = "duck")
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth(0.8f)) {
+                val w = maxWidth
+                GameProgressBar(progress, Modifier.fillMaxWidth(), height = 20.dp, fill = Brush.horizontalGradient(listOf(Palette.Sun, Palette.Coral)))
+                UiIcon(R.drawable.ui_duck, 36.dp, Modifier.offset(x = w * shown - 18.dp, y = (-24).dp + (sin(bob * 4f * PI.toFloat()) * 3f).dp).graphicsLayer { rotationZ = sin(bob * 4f * PI.toFloat()) * 8f })
+            }
         }
     }
 }
@@ -152,6 +199,7 @@ fun OnboardingScreen() {
     }
     var page by remember { mutableIntStateOf(0) }
     var naming by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { com.ngstudio.funrace.services.GameEvents.tutorialBegin() }
     LaunchedEffect(page, naming) { c.stage.showMenu(if (naming) MenuMode.SHOP else pages[page].mode) }
     BackHandler(enabled = page > 0 || naming) { c.back(); if (naming) naming = false else page-- }
     Box(Modifier.fillMaxSize()) {
@@ -186,6 +234,7 @@ fun OnboardingScreen() {
         } else NamePick(onDone = { name, ch ->
             c.save.update { d -> d.copy(profile = d.profile.copy(name = name, character = ch, onboardingDone = true), collection = d.collection.copy(owned = d.collection.owned + ch)) }
             c.audio.play(Sfx.UNLOCK)
+            com.ngstudio.funrace.services.GameEvents.tutorialComplete()
             nav.replaceAll(Screen.Main)
         })
     }
@@ -194,8 +243,8 @@ fun OnboardingScreen() {
 @Composable
 private fun NamePick(onDone: (String, String) -> Unit) {
     val c = LocalContainer.current
-    val starters = listOf("dash", "coral", "sunny")
-    var pick by remember { mutableStateOf("dash") }
+    val starters = listOf("kai", "mia", "leo")
+    var pick by remember { mutableStateOf(Catalog.DEFAULT_CHARACTER) }
     var name by remember { mutableStateOf(c.save.data.profile.name.takeIf { it != "Player" } ?: "") }
     val focus = LocalFocusManager.current
     LaunchedEffect(pick) { c.stage.showMenu(MenuMode.SHOP, characterId = pick) }

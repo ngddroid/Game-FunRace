@@ -43,6 +43,12 @@ data class Settings(
     val reducedMotion: Boolean = false,
     val leftHanded: Boolean = false,
     val showFps: Boolean = false,
+    /** Daily reward reminders and push messages. */
+    val notifications: Boolean = true,
+    /** Sends usage statistics (Google Analytics) and crash reports (Crashlytics). */
+    val shareData: Boolean = true,
+    /** The game has asked once for Android 13's notification permission. */
+    val notifAsked: Boolean = false,
 )
 
 @Serializable

@@ -55,12 +55,14 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -188,7 +190,9 @@ fun GameButton(
                     moveTo(x - faceH * 0.3f, off + 3f); lineTo(x + faceH * 0.1f, off + 3f)
                     lineTo(x - faceH * 0.2f, off + faceH - 3f); lineTo(x - faceH * 0.6f, off + faceH - 3f); close()
                 }
-                drawPath(p, Color(0x66FFFFFF))
+                // keep the glint on the button face only (it must never streak across the screen)
+                val face = Path().apply { addRoundRect(RoundRect(3f, off + 3f, size.width - 3f, off + faceH - 3f, r)) }
+                clipPath(face) { drawPath(p, Color(0x66FFFFFF)) }
             }
         }
         Row(

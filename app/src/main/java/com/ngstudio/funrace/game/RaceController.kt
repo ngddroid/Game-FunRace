@@ -204,12 +204,20 @@ class RaceController(
                     audio.play(Sfx.SQUEAK, if (mine) 0.6f else 0.25f)
                     if (mine) { haptics.play(Haptic.BONK); pop(listOf("BONK!", "OOF!", "WHOOPS!", "BOING!")[(sim.time * 10).toInt() % 4], 0xFFFF6B57) }
                 }
+                SimEvent.Type.SHOVE -> {
+                    // you ran into a rival and knocked them over
+                    audio.play(Sfx.BONK, 0.8f, 1.15f)
+                    audio.play(Sfx.SQUEAK, 0.4f, 1.1f)
+                    haptics.play(Haptic.TICK)
+                    pop(listOf("BUMP!", "OUT OF MY WAY!", "BOOM!")[(sim.time * 10).toInt() % 3], 0xFFFFD23F)
+                }
                 SimEvent.Type.BLOCKED -> if (mine) audio.play(Sfx.SQUEAK, 0.4f, 1.2f)
                 SimEvent.Type.SPLASH -> if (mine || near) {
                     audio.play(Sfx.SPLASH_BIG, if (mine) 1f else 0.5f)
                     if (mine) { haptics.play(Haptic.SPLASH); pop("SPLASH!", 0xFF19C6C2) }
                 }
                 SimEvent.Type.RESPAWN -> if (mine) audio.play(Sfx.POP, 0.7f)
+                SimEvent.Type.POOF -> if (mine) { audio.play(Sfx.WHOOSH, 0.5f, 1.3f); pop("TRY AGAIN!", 0xFFFFD23F) }
                 SimEvent.Type.CHECKPOINT -> if (mine) { audio.play(Sfx.CHECKPOINT); haptics.play(Haptic.TICK); pop("CHECKPOINT!", 0xFF7BE36B) }
                 SimEvent.Type.COIN -> if (mine) audio.play(Sfx.COIN, 0.6f, 1f + (p.coins % 5) * 0.04f)
                 SimEvent.Type.FINISH -> {
@@ -239,6 +247,9 @@ class RaceController(
                             HazType.GATES -> audio.play(Sfx.GATE, v)
                             HazType.WAVE -> audio.play(Sfx.WAVE_SURGE, v)
                             HazType.PENDULUM -> audio.play(Sfx.WHOOSH, v * 0.35f, 0.7f)
+                            HazType.HAMMER -> audio.play(Sfx.WHOOSH, v * 0.55f, 0.55f)
+                            HazType.SPINNER -> audio.play(Sfx.WHOOSH, v * 0.45f, 0.9f)
+                            HazType.ROLLERS -> audio.play(Sfx.SQUEAK, v * 0.5f, 0.8f)
                             else -> Unit
                         }
                     }
@@ -270,6 +281,20 @@ class RaceController(
 
     fun release() { stopLoop() }
 
+    /** First-time hints for the newer hurdles, shown while the player approaches one. */
+    private fun newHazardTip(s: Float): String? {
+        for (h in sim.hazards) {
+            if (s < h.zoneStart - 9f || s > h.zoneStart + 0.5f) continue
+            return when (h.type) {
+                HazType.SPINNER -> "Too high to hop! Wait for the bar to swing away"
+                HazType.HAMMER -> "The mallet hits hard. Go right after it passes!"
+                HazType.ROLLERS -> "Wait for the rollers to open, then dash through!"
+                else -> continue
+            }
+        }
+        return null
+    }
+
     private fun publishHud() {
         val p = sim.player
         val order = sim.standings()
@@ -283,6 +308,8 @@ class RaceController(
         if (phase == RacePhase.RACING && spec.level == 3 && sim.time in 9f..24f) tip = "Swipe up or tap JUMP to hop over noodles!"
         if (phase == RacePhase.RACING && spec.level == 1 && sim.time in 9f..20f && p.speed < 0.2f && !touching) tip = "Let go to stop. Wait for the gap!"
         if (spec.level == 5 && phase == RacePhase.RACING && p.turbo > 0f && p.turbo < 1f && sim.time < 40f) tip = "PERFECTs charge your Turbo!"
+        if (phase == RacePhase.RACING && spec.level <= 10) newHazardTip(p.s)?.let { tip = it }
+        if (phase == RacePhase.RACING && spec.level <= 12 && p.mode == Mode.CLIMB) tip = "Watch the baskets! Drag left or right to dodge coconuts"
         _hud.value = HudState(
             phase = phase,
             countdown = if (phase == RacePhase.COUNTDOWN) 3 - (phaseT / 0.8f).toInt() else 0,

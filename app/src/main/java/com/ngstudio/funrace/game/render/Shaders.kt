@@ -65,13 +65,13 @@ vec3 shade(vec3 base, vec3 N, highp vec3 W, vec4 ls, float gloss, float ao) {
     vec3 V = normalize(uCamPosF - W);
     float nv = clamp(dot(N, V), 0.0, 1.0);
     float rim = pow(1.0 - nv, 3.0);
-    c += uRim * rim * (0.25 + 0.75 * sh) * 0.4 * ao;
+    c += uRim * rim * (0.25 + 0.75 * sh) * 0.26 * ao;
     if (gloss > 0.01) {
         vec3 H = normalize(uSunDir + V);
         float sp = pow(max(dot(N, H), 0.0), mix(18.0, 110.0, clamp(gloss, 0.0, 1.0)));
-        c += uSunColor * sp * gloss * 1.6 * sh;
+        c += uSunColor * sp * gloss * 1.1 * sh;
         // glossy vinyl picks up a little sky
-        c += uAmbSky * pow(1.0 - nv, 4.0) * gloss * 0.25;
+        c += uAmbSky * pow(1.0 - nv, 4.0) * gloss * 0.12;
     }
     // water line: submerged parts tint toward the lagoon, caustics dance near the surface
     highp float dw = uWaterY - W.y;
@@ -94,6 +94,9 @@ float bayer4(vec2 p) {
 }
 
 vec3 grade(vec3 c) {
+    // soft shoulder above 0.8: bright surfaces keep their shading instead of clipping to flat white
+    vec3 over = max(c - 0.8, 0.0);
+    c = min(c, 0.8) + over / (1.0 + over * 5.0);
     float l = dot(c, vec3(0.299, 0.587, 0.114));
     c = mix(vec3(l), c, uGrade.x);
     c = (c - 0.5) * uGrade.y + 0.5;
@@ -282,9 +285,11 @@ uniform float uZones[48];
 out highp vec3 vWorld;
 out vec4 vColor;
 out float vPulse;
+out float vEdge;
 void main() {
     int z = int(floor(aMat.x * 255.0 + 0.5));
     vPulse = uZones[z];
+    vEdge = aMat.y;
     vWorld = aPos;
     vColor = aColor;
     gl_Position = uViewProj * vec4(aPos, 1.0);
@@ -295,15 +300,15 @@ void main() {
 in highp vec3 vWorld;
 in vec4 vColor;
 in float vPulse;
+in float vEdge;
 out vec4 frag;
 void main() {
-    highp float s = fract((vWorld.x + vWorld.z) * 0.9);
-    float stripe = smoothstep(0.45, 0.5, s) * (1.0 - smoothstep(0.95, 1.0, s));
-    vec3 c = mix(vColor.rgb, vec3(1.0, 0.95, 0.9), stripe * 0.75);
-    float a = vColor.a * (0.35 + 0.65 * vPulse);
-    if (a < 0.01) discard;
-    vec3 col = c * (0.85 + 0.35 * vPulse);
-    frag = vec4(finish(col, vWorld) * a, a);
+    // vEdge: 0 on the zone boundary, 1 once ~0.2 m inside
+    float border = 1.0 - smoothstep(0.42, 0.58, vEdge);
+    vec3 fill = mix(vColor.rgb, vec3(1.0, 0.97, 0.96), 0.3);
+    vec3 c = mix(fill * (0.96 + 0.08 * vPulse), vColor.rgb * 0.9, border);
+    float a = mix(0.78 + 0.17 * vPulse, 0.97, border);
+    frag = vec4(finish(c, vWorld) * a, a);
 }
 """
 
@@ -375,7 +380,8 @@ uniform vec4 uShoreRect;
 uniform float uSeaStyle;
 out vec4 frag;
 
-highp float h21(highp vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+// sin-free hash (cheap on mobile ALUs)
+highp float h21(highp vec2 p) { highp vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float vnoise(highp vec2 p) {
     highp vec2 i = floor(p); highp vec2 f = fract(p);
     vec2 u = vec2(f * f * (3.0 - 2.0 * f));
@@ -386,39 +392,24 @@ float vnoise(highp vec2 p) {
 void main() {
     highp vec2 p = vWorld.xz;
     highp float t = uTime;
-    vec2 d1 = vec2(sin(p.x * 0.83 + t * 1.15 + sin(p.y * 0.57)), cos(p.y * 0.77 - t * 0.95 + sin(p.x * 0.49)));
-    vec2 d2 = vec2(sin(p.x * 2.6 - p.y * 1.3 + t * 2.4), cos(p.y * 2.8 + p.x * 1.1 - t * 2.1));
-    vec3 N = normalize(vNormal + vec3(d1.x * 0.07 + d2.x * 0.035, 0.0, d1.y * 0.07 + d2.y * 0.035));
+    vec2 d1 = vec2(sin(p.x * 0.83 + t * 1.15 + p.y * 0.31), cos(p.y * 0.77 - t * 0.95 + p.x * 0.27));
+    vec3 N = normalize(vNormal + vec3(d1.x * 0.05, 0.0, d1.y * 0.05));
     vec3 V = normalize(uCamPosF - vWorld);
     float nv = max(dot(N, V), 0.0);
     float fres = pow(1.0 - nv, 4.0);
     vec2 suv = (p - uShoreRect.xy) / uShoreRect.zw;
     float shore = 0.0;
     if (suv.x > 0.0 && suv.x < 1.0 && suv.y > 0.0 && suv.y < 1.0) shore = texture(uShore, suv).r;
-    float sh = shadowAt(vLight);
+    // the flat lagoon look ignores shadows on the water (saves a shadow-map fetch per sea pixel)
+    float sh = uSeaStyle < 0.5 ? 1.0 : shadowAt(vLight);
     vec3 col;
     if (uSeaStyle < 0.5) {
-        // ---- tropical water
-        float shallow = smoothstep(0.05, 0.85, shore);
-        vec3 body = mix(uDeep, uShallow, shallow * 0.85 + vCrest * 0.25);
-        float sss = pow(max(dot(-V, uSunDir) * 0.5 + 0.5, 0.0), 3.0) * vCrest;
-        body += uShallow * sss * 0.35;
-        col = body * (0.72 + 0.28 * sh);
-        col = mix(col, uSkyRefl, fres * 0.62);
-        vec3 R = reflect(-uSunDir, N);
-        float sp = pow(max(dot(R, V), 0.0), 220.0) * 3.2 + pow(max(dot(R, V), 0.0), 26.0) * 0.18;
-        col += uSunColor * sp * sh;
-        // glitter on the waves
-        float g = vnoise(p * 3.1 + vec2(t * 0.6, -t * 0.4));
-        col += vec3(1.0) * smoothstep(0.86, 0.97, g) * (0.35 + vCrest) * 0.35 * sh;
-        // foam: contact band, travelling rings and crest caps
-        float n1 = vnoise(p * 1.4 + vec2(t * 0.25, t * 0.18));
-        float ring = sin(shore * 26.0 - t * 2.3 + n1 * 2.0) * 0.5 + 0.5;
-        float contact = smoothstep(0.78, 0.94, shore + n1 * 0.08);
-        float rings = smoothstep(0.38, 0.62, shore) * (1.0 - smoothstep(0.7, 0.8, shore)) * smoothstep(0.72, 0.9, ring);
-        float caps = smoothstep(0.55, 0.85, vCrest + n1 * 0.25) * 0.35;
-        float foam = clamp(contact + rings * 0.7 + caps, 0.0, 1.0);
-        col = mix(col, uFoam * (0.8 + 0.2 * sh), foam * 0.9);
+        // ---- tropical water: one clean flat colour with faint wave lines (toy-like, very readable)
+        col = mix(uDeep, uShallow, vCrest * 0.5) * (0.9 + 0.1 * sh);
+        col += vec3(0.9, 0.98, 1.0) * caustic(p * 0.26, t * 0.5) * 0.06;
+        col = mix(col, uSkyRefl, fres * 0.25);
+        // thin soft foam ring where pillars meet the water
+        col = mix(col, uFoam, smoothstep(0.86, 0.97, shore) * 0.5);
     } else if (uSeaStyle < 1.5) {
         // ---- lava
         float n1 = vnoise(p * 0.35 + vec2(t * 0.05, t * 0.03));

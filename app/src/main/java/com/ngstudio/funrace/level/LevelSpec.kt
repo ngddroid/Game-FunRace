@@ -5,8 +5,9 @@ import com.ngstudio.funrace.game.sim.RaceKind
 
 /**
  * One hazard placed on a piece. [at] = offset from the piece start (metres). Meaning of p/q:
- * PUSHER/GLOVES reach fraction, PENDULUM amplitude (rad), SWEEPER/TURNTABLE/PADDLE angular
- * speed (rad/s, signed) with q = arm count, CONVEYOR speed, BARRELS roll speed.
+ * PUSHER/GLOVES reach fraction, PENDULUM/HAMMER amplitude (rad), SWEEPER/TURNTABLE/PADDLE/SPINNER
+ * angular speed (rad/s, signed) with q = arm count, CONVEYOR speed, BARRELS roll speed.
+ * SPINNER uses [side] for the edge its post stands on.
  */
 data class HazSpec(
     val type: HazType,
@@ -46,7 +47,6 @@ class LevelSpec(
     val rivals: Int,
     val rivalSkill: Float,
     val difficulty: Float,
-    val guaranteeWin: Boolean = false,
     val chaserSpeed: Float = 0f,
     val chaserDelay: Float = 4f,
     val stormStrength: Float = 0f,

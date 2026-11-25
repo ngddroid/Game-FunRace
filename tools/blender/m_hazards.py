@@ -172,7 +172,8 @@ def paddle_wheel():
     pads = []
     for i in range(3):
         a = i * 2 * math.pi / 3
-        p = pillow(0.92, 1.1, 0.22, (0, math.cos(a) * 1.0, math.sin(a) * 1.0), rot=(-a, 0, 0), mat=paint(WHITE, TINT_A, 0.45, 0, 0.5), puff=0.3, sub=2)
+        # radial paddle (long axis pointing away from the axle), matching the simulation's paddles
+        p = pillow(0.92, 1.1, 0.22, (0, math.cos(a) * 1.0, math.sin(a) * 1.0), rot=(a, 0, 0), mat=paint(WHITE, TINT_A, 0.45, 0, 0.5), puff=0.3, sub=2)
         pads.append(p)
     return join([hub] + pads)
 
@@ -306,6 +307,80 @@ def coconut_dropper():
     return b
 
 
+# ----------------------------------------------------------------------------- spin bar (edge-mounted sweeper)
+def spin_post():
+    """Column standing just off the deck edge; top at y 0 (the bar pivots at y 0.2 above it).
+    Runs down to y -10 so it always reaches the sea."""
+    col = cyl(0.3, 10.0, (0, -5.0, 0), mat=paint(WHITE, TINT_B, 0.45), seg=24, caps=False)
+    bands = [torus(0.31, 0.05, (0, y, 0), mat=paint(0xFFFFFF, 0, 0.5), seg=24, side=8) for y in (-0.35, -1.1)]
+    collar = cyl(0.42, 0.22, (0, -0.08, 0), mat=paint(WHITE, TINT_A, 0.55), seg=28, bevel=0.06)
+    return join([col, collar] + bands)
+
+
+def spin_hub():
+    """Rotating head of the spin bar, pivot at origin (bar height). Carries a short counterweight
+    arm on -X that tilts up out of reach. The long bar (spin_bar) attaches along +X."""
+    hub = cyl(0.36, 0.5, (0, 0, 0), mat=paint(WHITE, TINT_A, 0.6), seg=28, bevel=0.08)
+    dome = sphere(0.36, (0, 0.24, 0), scale=(1, 0.6, 1), mat=paint(0xFFFFFF, 0, 0.6), seg=24, rings=12)
+    ring = torus(0.37, 0.05, (0, -0.12, 0), mat=paint(WHITE, TINT_B, 0.5), seg=28, side=8)
+    arm = capsule((-0.2, 0.05, 0), (-1.05, 0.62, 0), 0.12, mat=paint(WHITE, TINT_B, 0.5))
+    ball = sphere(0.34, (-1.15, 0.7, 0), mat=paint(WHITE, TINT_A, 0.7, 0, 0.5), seg=24, rings=14)
+    band = torus(0.345, 0.045, (-1.15, 0.7, 0), rot=(0, 0, 0.6), mat=paint(0xFFFFFF, 0, 0.5), seg=24, side=8)
+    f1 = face((0, 0.02, 0.37), 0.0, 1.0)
+    f2 = face((0, 0.02, -0.37), math.pi, 1.0)
+    return join([hub, dome, ring, arm, ball, band, f1, f2])
+
+
+def spin_bar():
+    """Long striped pool-noodle bar along +X from 0 to 1 (scale X to its length), radius 0.2."""
+    bars = []
+    n = 9
+    for k in range(n):
+        x0 = k / n
+        m = paint(WHITE, TINT_A, 0.5, 0, 0.3) if k % 2 == 0 else paint(0xFFFFFF, 0, 0.45, 0, 0.3)
+        bars.append(cyl(0.2, 1.0 / n, (x0 + 0.5 / n, 0, 0), rot=(0, 0, math.pi / 2), mat=m, seg=16, caps=False))
+    return join(bars)
+
+
+# ----------------------------------------------------------------------------- mega mallet
+MALLET_ARM = 4.3
+
+
+def mallet():
+    """Giant inflatable mallet hanging from its pivot at the origin, swinging about Z (along the
+    course). Head: a drum of radius 0.78 and length 2.0 with its axis along X (the swing direction),
+    centred at y = -MALLET_ARM."""
+    hy = -MALLET_ARM
+    axle = cyl(0.16, 0.7, (0, 0, 0), rot=(math.pi / 2, 0, 0), mat=paint(0xD8E0EA, 0, 0.8), seg=16)
+    knob = sphere(0.27, (0, 0, 0), mat=paint(WHITE, TINT_B, 0.6), seg=20, rings=12)
+    handle = cyl(0.12, MALLET_ARM - 0.5, (0, -(MALLET_ARM - 0.5) / 2, 0), mat=paint(0xF4F6FA, 0, 0.5), seg=16, caps=False)
+    grip = [torus(0.13, 0.035, (0, y, 0), mat=paint(WHITE, TINT_B, 0.5), seg=16, side=6) for y in (-0.6, -0.9, -1.2)]
+    collar = cyl(0.22, 0.3, (0, hy + 0.88, 0), mat=paint(WHITE, TINT_B, 0.5), seg=20, bevel=0.05)
+    drum = lathe([(0.0, -1.0), (0.62, -1.0), (0.75, -0.95), (0.78, -0.84), (0.74, -0.5), (0.71, -0.42), (0.71, 0.0),
+                  (0.71, 0.42), (0.74, 0.5), (0.78, 0.84), (0.75, 0.95), (0.62, 1.0), (0.0, 1.0)],
+                 mat=paint(WHITE, TINT_A, 0.65, 0, 0.35), seg=40)
+    paint_where(drum, paint(0xFFFFFF, 0, 0.55, 0, 0.35), lambda x, y, z, nx, ny, nz: 0.45 < abs(y) < 0.7)
+    paint_where(drum, paint(WHITE, TINT_B, 0.6, 0, 0.35), lambda x, y, z, nx, ny, nz: abs(y) > 0.9)
+    transform(drum, rot=(0, 0, math.pi / 2), loc=(0, hy, 0))
+    faces = [face((0, hy + 0.05, 0.72), 0.0, 1.9, angry=True), face((0, hy + 0.05, -0.72), math.pi, 1.9, angry=True)]
+    return join([axle, knob, handle, collar, drum] + grip + faces)
+
+
+# ----------------------------------------------------------------------------- roller squeeze
+def roller():
+    """Spinning foam roller along +X from 0 to 1 (scale X to length), radius 0.34, spiral stripes."""
+    parts = []
+    n = 18
+    for k in range(n):
+        x0 = k / n
+        seg = cyl(0.34, 1.0 / n, (x0 + 0.5 / n, 0, 0), rot=(0, 0, math.pi / 2), mat=paint(WHITE, TINT_A, 0.5, 0, 0.4), seg=28, caps=False)
+        # spiral stripes: colour each face by its angle around the axis plus a twist along X
+        paint_where(seg, paint(0xFFFFFF, 0, 0.5, 0, 0.4),
+                    lambda x, y, z, nx, ny, nz: ((math.atan2(z, y) / (2 * math.pi) + x * 1.6) % 0.5) < 0.2)
+        parts.append(seg)
+    caps = [sphere(0.34, (x, 0, 0), scale=(0.35, 1, 1), mat=paint(WHITE, TINT_B, 0.6), seg=28, rings=10) for x in (0.0, 1.0)]
+    return join(parts + caps)
+
 MODELS = {
     "pusher_pad": pusher_pad, "piston": piston, "side_box": side_box, "duck": duck, "beachball": beachball,
     "anchor": anchor, "discoball": discoball, "idol": idol, "icecube": icecube, "magma": magma, "candy": candy,
@@ -314,6 +389,7 @@ MODELS = {
     "cannon": cannon, "fan": fan, "fan_blades": fan_blades, "bollard": bollard, "gate_door": gate_door,
     "wave_tank": wave_tank, "wave": wave, "barrel": barrel, "turntable": turntable, "tilt_deck": tilt_deck,
     "conveyor_roller": conveyor_roller, "coconut_dropper": coconut_dropper,
+    "spin_post": spin_post, "spin_hub": spin_hub, "spin_bar": spin_bar, "mallet": mallet, "roller": roller,
 }
 
 

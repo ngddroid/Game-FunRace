@@ -46,6 +46,16 @@ import com.ngstudio.funrace.R
 import com.ngstudio.funrace.data.Progression
 import com.ngstudio.funrace.data.Settings
 import com.ngstudio.funrace.level.LevelRepository
+import com.ngstudio.funrace.services.Notifications
+import com.ngstudio.funrace.services.ReminderWorker
+import com.ngstudio.funrace.services.Reminders
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
+import java.util.concurrent.TimeUnit
 import com.ngstudio.funrace.ui.LaunchOptions
 import com.ngstudio.funrace.ui.LocalNav
 import com.ngstudio.funrace.ui.RaceRequest
@@ -86,6 +96,12 @@ fun SettingsScreen(activity: Activity) {
     var confirmReset by remember { mutableStateOf(false) }
     var editName by remember { mutableStateOf(false) }
     fun set(f: (Settings) -> Settings) { c.save.update { it.copy(settings = f(it.settings)) }; c.applySettings(c.save.data.settings) }
+    val ctx = LocalContext.current
+    // the switch shows what will really happen: also off while Android blocks the game's notifications
+    var permTick by remember { mutableIntStateOf(0) }
+    LifecycleResumeEffect(Unit) { permTick++; onPauseOrDispose { } }
+    val notifOn = remember(s.notifications, permTick) { s.notifications && Notifications.allowed(ctx) }
+    val enableNotifs = rememberNotificationEnabler(c) { on -> permTick++; if (on) nav.showToast("Notifications on!") }
     GameBackground(deep = true) {
         Column(Modifier.fillMaxSize()) {
             ScreenHeader("Settings") { c.back(); nav.pop() }
@@ -96,6 +112,9 @@ fun SettingsScreen(activity: Activity) {
                     SettingRow(R.drawable.ui_sound, "Sound Effects") { GameToggle(s.sfx, { v -> set { it.copy(sfx = v) } }) }
                     GameSlider(s.sfxVolume, { v -> set { it.copy(sfxVolume = v) } }, Modifier.fillMaxWidth().padding(start = 48.dp), enabled = s.sfx)
                     SettingRow(R.drawable.ui_vibrate, "Haptics") { GameToggle(s.haptics, { v -> set { it.copy(haptics = v) } }) }
+                    SettingRow(R.drawable.ui_gift, "Notifications") {
+                        GameToggle(notifOn, { v -> if (v) enableNotifs() else { set { it.copy(notifications = false) }; c.applyNotifications(false); permTick++ } })
+                    }
                     SettingRow(R.drawable.ui_graphics, "Graphics") {}
                     Row(Modifier.fillMaxWidth().padding(start = 48.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         for ((i, label) in listOf("Auto", "Low", "Med", "High").withIndex()) {
@@ -113,6 +132,7 @@ fun SettingsScreen(activity: Activity) {
                     LinkRow(R.drawable.ui_hand, "Replay tutorial") { c.save.update { it.copy(profile = it.profile.copy(onboardingDone = false)) }; nav.replaceAll(Screen.Onboarding) }
                     LinkRow(R.drawable.ui_doc, "Terms of Service") { nav.push(Screen.Legal(LegalDoc.TERMS)) }
                     LinkRow(R.drawable.ui_privacy, "Privacy Policy") { nav.push(Screen.Legal(LegalDoc.PRIVACY)) }
+                    SettingRow(R.drawable.ui_info, "Usage & crash reports") { GameToggle(s.shareData, { v -> set { it.copy(shareData = v) } }) }
                     LinkRow(R.drawable.ui_trash, "Reset progress") { confirmReset = true }
                 }
                 if (BuildConfig.DEBUG) {
@@ -121,6 +141,15 @@ fun SettingsScreen(activity: Activity) {
                     Panel(Modifier.fillMaxWidth(), padding = 14.dp) {
                         LinkRow(R.drawable.ui_coin, "+5,000 coins & 200 gems") { c.save.update { it.copy(wallet = it.wallet.copy(coins = it.wallet.coins + 5000, gems = it.wallet.gems + 200)) } }
                         LinkRow(R.drawable.ui_lock, "Unlock levels 1–60") { c.save.update { it.copy(progress = it.progress.copy(highestUnlocked = maxOf(it.progress.highestUnlocked, 60))) } }
+                        LinkRow(R.drawable.ui_gift, "Test notification now") {
+                            if (!Notifications.allowed(ctx)) nav.showToast("Notifications are off for this app")
+                            else { val (t, b) = Reminders.message(1, c.save.data, Progression.today()); Notifications.post(ctx, 999, Notifications.CH_REMINDERS, t, b, "debug") }
+                        }
+                        LinkRow(R.drawable.ui_stopwatch, "Reminders in 10 s (close the game)") {
+                            WorkManager.getInstance(ctx).enqueue(OneTimeWorkRequestBuilder<ReminderWorker>().setInitialDelay(10, TimeUnit.SECONDS).setInputData(workDataOf(Reminders.KEY_DAY to 3)).build())
+                            nav.showToast("Reminder booked: go to the home screen")
+                        }
+                        LinkRow(R.drawable.ui_storm, "Test crash (Crashlytics)") { throw RuntimeException("Test crash from the debug menu (Crashlytics check)") }
                         LinkRow(R.drawable.ui_turbo, "Autopilot: " + if (LaunchOptions.autopilot) "ON" else "OFF") { LaunchOptions.autopilot = !LaunchOptions.autopilot; nav.showToast("Autopilot " + if (LaunchOptions.autopilot) "on" else "off") }
                         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                             var lv by remember { mutableStateOf("100") }

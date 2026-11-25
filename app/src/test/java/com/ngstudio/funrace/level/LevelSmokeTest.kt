@@ -10,7 +10,7 @@ class LevelSmokeTest {
         for (n in levels) {
             val t0 = System.nanoTime()
             val spec = LevelRepository.get(n)
-            val rep = LevelValidator.check(spec, withAutopilot = true, autopilotSkill = if (n <= 10) 0.5f else 0.85f)
+            val rep = if (n <= 10) LevelValidator.checkTutorial(spec) else LevelValidator.check(spec, withAutopilot = true, autopilotSkill = 0.85f)
             val ms = (System.nanoTime() - t0) / 1_000_000
             println("L%-5d %-22s %-10s D=%.2f haz=%2d rivals=%d rank=%-2d t=%5.1fs ok=%s %dms %s".format(n, spec.name, spec.kind, spec.difficulty, spec.hazardCount, spec.rivals, rep.rank, rep.time, rep.ok, ms, rep.problems.joinToString("; ")))
             if (!rep.ok) fails++

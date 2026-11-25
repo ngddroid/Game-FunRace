@@ -51,6 +51,8 @@ class GameRenderer(
         private set
     @Volatile var gpuName: String = ""
         private set
+    /** Called (GL thread) with the tier this GPU auto-detects as, whatever the user picked. */
+    @Volatile var onTierDetected: ((QualityTier) -> Unit)? = null
 
     fun show(s: SceneSpec) {
         spec = s
@@ -90,7 +92,9 @@ class GameRenderer(
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         gpuName = GLES30.glGetString(GLES30.GL_RENDERER) ?: ""
-        tier = when (requestedTier) { 1 -> QualityTier.LOW; 2 -> QualityTier.MEDIUM; 3 -> QualityTier.HIGH; else -> autoTier(gpuName) }
+        val detected = autoTier(gpuName)
+        onTierDetected?.invoke(detected)
+        tier = when (requestedTier) { 1 -> QualityTier.LOW; 2 -> QualityTier.MEDIUM; 3 -> QualityTier.HIGH; else -> detected }
         Log.i("GameRenderer", "GPU=$gpuName tier=$tier")
         res = try { RenderResources(context, tier) } catch (t: Throwable) {
             Log.e("GameRenderer", "Resource init failed at $tier, falling back to LOW", t)
@@ -188,7 +192,7 @@ class MsaaConfigChooser(private val msaa: Boolean) : GLSurfaceView.EGLConfigChoo
  * The 3D surface. [renderScale] < 1 renders at a lower resolution that the display hardware
  * upscales for free (keeps 60 fps on modest GPUs).
  */
-class GameSurfaceView(context: Context, val renderer: GameRenderer, msaa: Boolean, private val renderScale: Float) : GLSurfaceView(context) {
+class GameSurfaceView(context: Context, val renderer: GameRenderer, msaa: Boolean, private var renderScale: Float) : GLSurfaceView(context) {
     init {
         setEGLContextClientVersion(3)
         setEGLConfigChooser(MsaaConfigChooser(msaa))
@@ -199,7 +203,19 @@ class GameSurfaceView(context: Context, val renderer: GameRenderer, msaa: Boolea
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        if (renderScale < 0.99f && w > 0 && h > 0) holder.setFixedSize((w * renderScale).toInt(), (h * renderScale).toInt())
+        applyScale(w, h)
+    }
+
+    /** Changes the render resolution at runtime (UI thread); the GL context survives. */
+    fun setRenderScale(scale: Float) {
+        if (kotlin.math.abs(scale - renderScale) < 0.005f) return
+        renderScale = scale
+        applyScale(width, height)
+    }
+
+    private fun applyScale(w: Int, h: Int) {
+        if (w <= 0 || h <= 0) return
+        if (renderScale < 0.99f) holder.setFixedSize((w * renderScale).toInt(), (h * renderScale).toInt()) else holder.setSizeFromLayout()
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {

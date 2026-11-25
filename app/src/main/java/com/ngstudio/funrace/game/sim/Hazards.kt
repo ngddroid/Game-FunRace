@@ -20,6 +20,7 @@ enum class HazType(val label: String) {
     PRESS("Squish Press"), TRAPDOOR("Flip Tiles"), PADDLE("Paddle Wheel"), CANNON("Beach-Ball Cannon"),
     TILT("Tilt Deck"), FAN("Fan Gust"), BOLLARDS("Pop-up Bollards"), GATES("Sliding Gates"), WAVE("Wave Machine"),
     CONVEYOR("Lazy River"), BARRELS("Barrel Roll"), TURNTABLE("Turntable"), COCONUTS("Coconut Drop"), RAFT("Floaty Ferry"),
+    SPINNER("Spin Bar"), HAMMER("Mega Mallet"), ROLLERS("Roller Squeeze"),
 }
 
 /** Result of a racer touching a hazard. */
@@ -42,13 +43,24 @@ object Danger {
     const val KNOCK = 2
     /** Floor vanished (trapdoor) or racer is swept off. */
     const val FALL = 3
+    /** A fixed post in the lane (sweeper stand): stops the racer and slides it around; not a timing hazard. */
+    const val BUMP = 4
+
+    /** Hurts (bonk or fall), as opposed to just being in the way. */
+    fun hurts(k: Int) = k == KNOCK || k == FALL
+
+    /** Physically in the way: the racer can't walk into it. */
+    fun solid(k: Int) = k == BLOCK || k == BUMP
 }
 
 const val RR = 0.3f          // racer radius
 const val RH = 1.2f          // racer height
 
-/** Rectangle in hazard-local coords used for the red telegraph decals. */
-class Zone(val a0: Float, val a1: Float, val d0: Float, val d1: Float)
+/**
+ * Rectangle in hazard-local coords used for the red telegraph decals. With [r] > 0 the zone is
+ * the part of the rectangle inside a disc of radius [r] centred at (a = 0, d = [cd]).
+ */
+class Zone(val a0: Float, val a1: Float, val d0: Float, val d1: Float, val r: Float = 0f, val cd: Float = 0f)
 
 /**
  * A hazard anchored at course distance [s0]. Everything is a pure function of race time, so the
@@ -179,7 +191,8 @@ class Pendulum(s0: Float, hw: Float, period: Float, phase: Float, val amp: Float
 open class Sweeper(type: HazType, s0: Float, hw: Float, val omega: Float, phase: Float, val arms: Int, val armLen: Float, val hubD: Float = 0f) :
     Hazard(type, s0, hw, TAU / abs(omega), phase) {
     constructor(s0: Float, hw: Float, omega: Float, phase: Float, arms: Int, armLen: Float) : this(HazType.SWEEPER, s0, hw, omega, phase, arms, armLen)
-    val hubR = 0.3f
+    /** Radius of the centre stand (its base, as drawn). */
+    val hubR = 0.42f
     override val reach get() = armLen + RR + 0.2f
 
     fun baseAngle(t: Float) = omega * t + phase * abs(omega)
@@ -188,7 +201,11 @@ open class Sweeper(type: HazType, s0: Float, hw: Float, val omega: Float, phase:
         val ld = d - hubD
         val r = sqrt(a * a + ld * ld)
         if (r > armLen + RR + 0.2f) return Danger.SAFE
-        if (r < hubR + RR) return Danger.SAFE // the hub just nudges racers aside (see drift)
+        if (r < hubR + RR) {
+            // the centre stand is solid: bump off it and slide around (see drift)
+            val k = if (r > 1e-3f) 1f / r else 0f
+            return hit?.set(Danger.BUMP, a * k * 3f, (if (ld >= 0f) 1f else -1f) * 3f, 0f) ?: Danger.BUMP
+        }
         if (y > 0.82f) return Danger.SAFE // jumped over the arm
         val beta = atan2(ld, a)
         val base = baseAngle(t)
@@ -210,13 +227,13 @@ open class Sweeper(type: HazType, s0: Float, hw: Float, val omega: Float, phase:
     override fun drift(t: Float, a: Float, d: Float): Float {
         val ld = d - hubD
         val r = sqrt(a * a + ld * ld)
-        if (r >= hubR + RR + 0.1f) return 0f
+        if (r >= hubR + RR + 0.3f) return 0f
         return (if (ld >= 0f) 1f else -1f) * 4f
     }
 
     override fun telegraph(t: Float): Float = 0.6f + 0.4f * sin(t * 6f)
     override fun state(t: Float, out: FloatArray) { out[0] = baseAngle(t); out[1] = arms.toFloat(); out[2] = armLen; out[3] = hubD }
-    override fun zones() = listOf(Zone(-armLen, armLen, max(-hw, hubD - armLen), min(hw, hubD + armLen)))
+    override fun zones() = listOf(Zone(-armLen, armLen, max(-hw, hubD - armLen), min(hw, hubD + armLen), armLen + 0.2f, hubD))
 }
 
 class Turntable(s0: Float, hw: Float, omega: Float, phase: Float) : Sweeper(HazType.TURNTABLE, s0, hw, omega, phase, 2, hw + 0.7f) {
@@ -244,14 +261,15 @@ class Gloves(s0: Float, hw: Float, period: Float, phase: Float, val side: Float,
 
     override fun danger(t: Float, a: Float, d: Float, y: Float, hit: Hit?): Int {
         if (abs(a) > 0.4f + RR || y > 1.05f) return Danger.SAFE
-        val x = u(t)
-        if (x !in 0.72f..0.86f) return Danger.SAFE
         val e = extension(t)
-        if (e < 0.1f) return Danger.SAFE
-        val face = side * (hw - e)
+        if (e < 0.05f) return Danger.SAFE
+        val face = side * (hw - e)                // the glove's front (see HazardGeometry.glove)
         val inside = if (side > 0) d + RR > face else d - RR < face
         if (!inside) return Danger.SAFE
-        return hit?.set(Danger.KNOCK, 0f, -side * 11f, 5f) ?: Danger.KNOCK
+        val x = u(t)
+        return if (x in 0.72f..0.86f) hit?.set(Danger.KNOCK, 0f, -side * 11f, 5f) ?: Danger.KNOCK
+        // pulling back: still solid, it just shoves you aside
+        else hit?.set(Danger.BLOCK, 0f, -side * 2.5f, 0f) ?: Danger.BLOCK
     }
 
     override fun telegraph(t: Float) = val0(u(t), 0.5f, 0.72f, 0.84f)
@@ -352,21 +370,27 @@ class PaddleWheel(s0: Float, hw: Float, val omega: Float, phase: Float) : Hazard
     override fun danger(t: Float, a: Float, d: Float, y: Float, hit: Hit?): Int {
         if (abs(a) > radius + RR) return Danger.SAFE
         val ang0 = angle(t)
-        val py = y + 0.7f
-        val ry = py - axleH
-        val r = sqrt(a * a + ry * ry)
-        if (r < 0.3f || r > radius + 0.55f + RR) return Danger.SAFE
-        val beta = atan2(a, -ry) // 0 = straight down
-        for (k in 0 until paddles) {
-            val al = ang0 + TAU * k / paddles
-            if (cos(al) < 0.15f) continue // paddle is up in the air
-            val delta = wrapAngle(beta - al)
-            if (abs(delta) * r < 0.12f + RR + 0.05f) {
-                val dir = sign(omega) // positive omega: bottom paddle moves toward +a
-                return hit?.set(Danger.KNOCK, dir * 7.5f, 0f, 3.5f, 0.7f) ?: Danger.KNOCK
+        for (py in floatArrayOf(y + RR, y + RH - RR)) {
+            val ry = py - axleH
+            val r = sqrt(a * a + ry * ry)
+            if (r < 0.3f || r > PADDLE_TIP + RR) continue
+            val beta = atan2(a, -ry) // 0 = straight down
+            for (k in 0 until paddles) {
+                val al = ang0 + TAU * k / paddles
+                if (cos(al) < 0.15f) continue // paddle is up in the air
+                val delta = wrapAngle(beta - al)
+                if (abs(delta) < 1.2f && abs(sin(delta)) * r < 0.12f + RR) {
+                    val dir = sign(omega) // positive omega: bottom paddle moves toward +a
+                    return hit?.set(Danger.KNOCK, dir * 7.5f, 0f, 3.5f, 0.7f) ?: Danger.KNOCK
+                }
             }
         }
         return Danger.SAFE
+    }
+
+    companion object {
+        /** Paddles reach this far from the axle (as drawn). */
+        const val PADDLE_TIP = 1.55f
     }
 
     override val lethal get() = false
@@ -394,7 +418,7 @@ class Cannon(s0: Float, hw: Float, period: Float, phase: Float, val side: Float,
         if (abs(a) > ballR + RR || y > 1.25f) return Danger.SAFE
         val bd = ballD(t)
         if (bd > 90f) return Danger.SAFE
-        if (abs(d - bd) > ballR + RR) return Danger.SAFE
+        if (a * a + (d - bd) * (d - bd) > (ballR + RR) * (ballR + RR)) return Danger.SAFE
         return hit?.set(Danger.KNOCK, 0f, -side * 9f, 5f) ?: Danger.KNOCK
     }
 
@@ -429,7 +453,7 @@ class Tilt(s0: Float, hw: Float, period: Float, phase: Float, val halfLen: Float
 
     override fun danger(t: Float, a: Float, d: Float, y: Float, hit: Hit?): Int {
         if (abs(a) > halfLen || y > 0.2f) return Danger.SAFE
-        return if (abs(roll(t)) > 0.12f) Danger.FALL else Danger.SAFE
+        return if (abs(roll(t)) > 0.12f) hit?.set(Danger.FALL, 0f, 0f, 0f) ?: Danger.FALL else Danger.SAFE
     }
 
     override fun drift(t: Float, a: Float, d: Float): Float {
@@ -495,7 +519,7 @@ class Bollards(s0: Float, hw: Float, period: Float, phase: Float) : Hazard(HazTy
             val da = a - rowA[r]; val dd = d - cols[c]
             if (da * da + dd * dd > (postR + RR) * (postR + RR)) continue
             val h = height(t, r, c)
-            if (h < 0.15f || y > h * 0.95f) continue
+            if (h < 0.03f || y > h * 0.95f) continue
             if (rising(t, r, c)) return hit?.set(Danger.KNOCK, 0f, (if (d >= cols[c]) 1f else -1f) * 4.5f, 8.5f) ?: Danger.KNOCK
             return hit?.set(Danger.BLOCK, if (da < 0f) -2.5f else 2.5f, 0f, 0f) ?: Danger.BLOCK
         }
@@ -537,8 +561,8 @@ class Gates(s0: Float, hw: Float, period: Float, phase: Float) : Hazard(HazType.
         if (abs(a) > 0.15f + RR) return Danger.SAFE
         val c = closure(t)
         if (c < 0.05f) return Danger.SAFE
-        val gap = hw * (1f - c) // opening half-width around the centre
-        if (abs(d) + RR * 0.6f < gap) return Danger.SAFE
+        val gap = hw * (1f - c) - 0.05f // opening half-width around the centre (door edge as drawn)
+        if (abs(d) + RR * 0.9f < gap) return Danger.SAFE
         return hit?.set(Danger.BLOCK, if (a < 0f) -3f else 3f, 0f, 0f) ?: Danger.BLOCK
     }
 
@@ -587,6 +611,17 @@ class Conveyor(s0: Float, hw: Float, val halfLen: Float, val speed: Float) : Haz
     override fun zones() = emptyList<Zone>()
 }
 
+/** The belt under (s, d) at [t]: the strongest one, never the sum (belts must not stack). */
+fun beltSpeed(hazards: List<Hazard>, t: Float, s: Float, d: Float): Float {
+    var v = 0f
+    for (h in hazards) {
+        if (h.type != HazType.CONVEYOR) continue
+        val c = h.conveyor(t, s - h.s0, d)
+        if (abs(c) > abs(v)) v = c
+    }
+    return v
+}
+
 // ------------------------------------------------------------------------------------ BARRELS
 /** Barrels rolling down a ramp, alternating halves. state: pairs (a, d) for up to 3 barrels. */
 class Barrels(s0: Float, hw: Float, period: Float, phase: Float, val rampHalf: Float, val rollSpeed: Float = 4f) : Hazard(HazType.BARRELS, s0, hw, period, phase) {
@@ -611,10 +646,10 @@ class Barrels(s0: Float, hw: Float, period: Float, phase: Float, val rampHalf: F
     private val tmp = FloatArray(3)
 
     override fun danger(t: Float, a: Float, d: Float, y: Float, hit: Hit?): Int {
-        if (abs(a) > rampHalf || y > 0.9f) return Danger.SAFE
+        if (abs(a) > rampHalf + radius + RR || y > 0.9f) return Danger.SAFE
         for (k in 0..2) {
             if (!barrel(t, k, tmp)) continue
-            if (abs(a - tmp[0]) < radius + RR && abs(d - tmp[1]) < hw * 0.5f + RR * 0.5f)
+            if (abs(a - tmp[0]) < radius + RR && abs(d - tmp[1]) < hw * 0.5f + RR * 0.9f)
                 return hit?.set(Danger.KNOCK, -7.5f, 0f, 4f, 0.8f) ?: Danger.KNOCK
         }
         return Danger.SAFE
@@ -630,19 +665,30 @@ class Barrels(s0: Float, hw: Float, period: Float, phase: Float, val rampHalf: F
 }
 
 // ------------------------------------------------------------------------------------ COCONUTS (climb wall)
-/** Coconuts dropping down a climbing wall, alternating halves. a = height on wall from its base. state: (h, d) x2. */
+/**
+ * Coconuts dropping down a climbing wall in three columns (left, centre, right in turn). They hit
+ * exactly where they are drawn, the same for every racer: a coconut bonks a climber only when it
+ * actually touches them. Climbers can slide sideways to dodge; each basket tips before it drops.
+ * a = height on the wall from its base. state: (h, d) x2 for falling nuts, [4..6] basket tip per column.
+ */
 class Coconuts(s0: Float, hw: Float, period: Float, phase: Float, val wallH: Float) : Hazard(HazType.COCONUTS, s0, hw, period, phase) {
     override val reach get() = wallH
-    private val fall = 0.9f
+    /** Coconuts start inside the baskets, which hang [DROP_ABOVE] over the wall top (clear of climbers). */
+    val dropTop get() = wallH + DROP_ABOVE
+    private val fall get() = 0.9f * sqrt(dropTop / max(wallH, 1f))
+    /** Drop columns (lateral d). */
+    val columns: FloatArray get() = floatArrayOf(-hw * 0.55f, 0f, hw * 0.55f)
+    private val interval get() = period / 2f
+
+    private fun column(n: Int) = columns[((n % 3) + 3) % 3]
 
     fun nut(t: Float, k: Int, out: FloatArray): Boolean {
-        val half = period / 2f
         val tt = t + phase
-        val n = floor(tt / half).toInt() - k
-        val since = tt - n * half
+        val n = floor(tt / interval).toInt() - k
+        val since = tt - n * interval
         if (since > fall) return false
-        out[0] = wallH * (1f - (since / fall).let { it * it })
-        out[1] = if (n % 2 == 0) hw * 0.45f else -hw * 0.45f
+        out[0] = dropTop * (1f - (since / fall).let { it * it })
+        out[1] = column(n)
         return true
     }
 
@@ -650,11 +696,18 @@ class Coconuts(s0: Float, hw: Float, period: Float, phase: Float, val wallH: Flo
 
     /** Here [a] is the racer's height on the wall measured from the wall's base. */
     override fun danger(t: Float, a: Float, d: Float, y: Float, hit: Hit?): Int {
-        if (a < 0f) return Danger.SAFE
+        // only climbers (and racers waiting at the wall's foot); the top deck is behind the drop line
+        if (a < -0.3f || a > wallH) return Danger.SAFE
         for (k in 0..1) {
             if (!nut(t, k, tmp)) continue
-            if (abs(tmp[0] - (a + 0.9f)) < 0.6f && abs(d - tmp[1]) < hw * 0.45f + 0.15f)
-                return hit?.set(Danger.KNOCK, -3f, 0f, 1f, 0.9f) ?: Danger.KNOCK
+            // the climber's body (feet to raised hands) as a vertical segment, vs the coconut ball
+            val dy = when {
+                tmp[0] < a + BODY_LO -> a + BODY_LO - tmp[0]
+                tmp[0] > a + BODY_HI -> tmp[0] - (a + BODY_HI)
+                else -> 0f
+            }
+            val dd = d - tmp[1]
+            if (dy * dy + dd * dd < CONTACT * CONTACT) return hit?.set(Danger.KNOCK, -3f, 0f, 1f, 0.9f) ?: Danger.KNOCK
         }
         return Danger.SAFE
     }
@@ -662,6 +715,183 @@ class Coconuts(s0: Float, hw: Float, period: Float, phase: Float, val wallH: Flo
     override fun telegraph(t: Float) = 0.5f
     override fun state(t: Float, out: FloatArray) {
         for (k in 0..1) { if (nut(t, k, tmp)) { out[k * 2] = tmp[0]; out[k * 2 + 1] = tmp[1] } else out[k * 2] = 99f }
+        // basket tip: the next column to drop leans over before release, the one dropping springs back
+        val tt = t + phase
+        val n = floor(tt / interval).toInt()
+        val f = tt / interval - n
+        for (c in 0..2) out[4 + c] = 0f
+        out[4 + (((n + 1) % 3) + 3) % 3] = smoothstep(0.45f, 1f, f)
+        out[4 + ((n % 3) + 3) % 3] = max(out[4 + ((n % 3) + 3) % 3], 1f - smoothstep(0f, 0.35f, f))
     }
     override fun zones() = emptyList<Zone>()
+
+    companion object {
+        /** Basket pivot height over the wall top; the coconut leaves from inside the basket. */
+        const val BASKET_ABOVE = 2.15f
+        const val DROP_ABOVE = 2.0f
+        /** Coconut radius as drawn (model 0.24 x1.1 tall, scaled 1.2). */
+        const val NUT_R = 0.3f
+        /** Climber body: slim (0.24 m half-width) from the feet up to the raised hands. */
+        const val BODY_R = 0.24f
+        const val BODY_LO = 0.1f
+        const val BODY_HI = 1.6f
+        const val CONTACT = NUT_R + BODY_R
+    }
+}
+
+// ------------------------------------------------------------------------------------ SPINNER
+/**
+ * Spin Bar: a long striped bar on a post just off one edge ([side] +1 = right), sweeping a half-disc
+ * across the whole deck at chest height. Too high to hop: wait for it to swing out over the water,
+ * then go. A short counterweight arm on the other side tilts up out of reach.
+ * state: [0] bar angle (a = cos, d = sin), [1] bar length, [2] hub d, [3] bar height.
+ */
+class Spinner(s0: Float, hw: Float, val omega: Float, phase: Float, val side: Float) :
+    Hazard(HazType.SPINNER, s0, hw, TAU / abs(omega), phase) {
+    val hubD = side * (hw + 0.42f)
+    /** Long enough to sweep past the far edge, so there is no safe lane to hide in. */
+    val barLen = 2f * hw + 0.42f + RR + 0.35f
+    val barH = 0.95f
+    private val barR = 0.2f
+    override val reach get() = barLen + TIP_R + RR + 0.05f
+
+    fun angle(t: Float) = omega * t + phase * abs(omega)
+
+    override fun danger(t: Float, a: Float, d: Float, y: Float, hit: Hit?): Int {
+        if (y > barH + 0.4f) return Danger.SAFE
+        val ld = d - hubD
+        val r2 = a * a + ld * ld
+        val far = barLen + TIP_R + RR
+        if (r2 > far * far) return Danger.SAFE
+        val al = angle(t)
+        val ca = cos(al); val sa = sin(al)
+        val along = a * ca + ld * sa            // distance along the bar from the hub
+        val perp = abs(-a * sa + ld * ca)       // distance from the bar's axis
+        val onBar = along in 0f..barLen && perp <= barR + RR
+        val tx = along - barLen
+        val onTip = tx * tx + perp * perp <= (TIP_R + RR) * (TIP_R + RR)
+        if (!onBar && !onTip) return Danger.SAFE
+        // swept along the direction of rotation, and flung a little outward
+        val sg = sign(omega)
+        val ta = -sa * sg; val td = ca * sg
+        return hit?.set(Danger.KNOCK, ta * 6.5f + ca * 2f, td * 9.5f + sa * 3f, 5f) ?: Danger.KNOCK
+    }
+
+    /** 1 while the bar points across the deck, low while it swings out over the water. */
+    override fun telegraph(t: Float): Float = (0.6f - 0.4f * sin(angle(t)) * side).coerceIn(0f, 1f)
+    override fun state(t: Float, out: FloatArray) { out[0] = angle(t); out[1] = barLen; out[2] = hubD; out[3] = barH }
+    override fun zones() = listOf(Zone(-barLen, barLen, -hw, hw, barLen + 0.15f, hubD))
+
+    companion object {
+        /** Ball on the end of the bar (as drawn). */
+        const val TIP_R = 0.28f
+    }
+
+    override fun event(tPrev: Float, t: Float): Boolean {
+        // whoosh as the bar swings onto the deck
+        val a = sin(angle(tPrev)) * side; val b = sin(angle(t)) * side
+        return a > 0f && b <= 0f
+    }
+}
+
+// ------------------------------------------------------------------------------------ HAMMER
+/**
+ * Mega Mallet: a giant mallet on an overhead gantry swinging across the deck. Unlike the duck it
+ * hits hard enough to send racers into the lagoon. The head is a drum whose axis follows the swing.
+ * state: [0] angle (rad, + swings toward +d), [1] arm length, [2] pivot height.
+ */
+class Hammer(s0: Float, hw: Float, period: Float, phase: Float, val amp: Float) : Hazard(HazType.HAMMER, s0, hw, period, phase) {
+    val arm = 4.3f
+    val pivotH = 5.55f
+    val headR = 0.78f
+    val headHalf = 1.0f
+    override val reach = headR + RR + 0.05f
+
+    fun angle(t: Float) = amp * sin(TAU * (t + phase) / period)
+    private fun angVel(t: Float) = amp * cos(TAU * (t + phase) / period) * TAU / period
+
+    override fun danger(t: Float, a: Float, d: Float, y: Float, hit: Hit?): Int {
+        if (abs(a) > headR + RR) return Danger.SAFE
+        val th = angle(t)
+        val hx = arm * sin(th)                  // head centre (d)
+        val hy = pivotH - arm * cos(th)          // head centre (height)
+        val tx = cos(th); val ty = sin(th)       // drum axis in the (d, y) plane
+        val lim = headHalf - 0.15f
+        var best = Float.MAX_VALUE
+        // racer as three points up its body, each tested against the drum's axis segment
+        for (k in 0..2) {
+            val py = y + 0.25f + k * 0.4f
+            val dx = d - hx; val dy = py - hy
+            val u = (dx * tx + dy * ty).coerceIn(-lim, lim)
+            val ex = dx - tx * u; val ey = dy - ty * u
+            best = min(best, ex * ex + ey * ey)
+        }
+        val r = headR + RR
+        if (best + a * a > r * r) return Danger.SAFE
+        val v = angVel(t)
+        val dir = if (abs(v) > 0.2f) sign(v) else sign(d - hx).let { if (it == 0f) 1f else it }
+        return hit?.set(Danger.KNOCK, 0f, dir * 12.5f, 6f, 0.8f) ?: Danger.KNOCK
+    }
+
+    override fun telegraph(t: Float): Float = 1f - min(1f, abs(sin(TAU * (t + phase) / period)) * 1.3f)
+    override fun state(t: Float, out: FloatArray) { out[0] = angle(t); out[1] = arm; out[2] = pivotH }
+    override fun zones(): List<Zone> {
+        val w = min(hw, arm * sin(amp) + headHalf)
+        return listOf(Zone(-headR, headR, -w, w))
+    }
+    override fun event(tPrev: Float, t: Float): Boolean {
+        val a = sin(TAU * (tPrev + phase) / period); val b = sin(TAU * (t + phase) / period)
+        return (a < 0f) != (b < 0f)
+    }
+}
+
+// ------------------------------------------------------------------------------------ ROLLERS
+/**
+ * Roller Squeeze: two rows of spinning foam rollers slide in from both edges, meet in the middle,
+ * then slide back. The second row follows the first like a wave, so a well-timed dash rides
+ * straight through; a closing roller rolls racers back.
+ * state: [0] row-0 closure 0..1, [1] row-1 closure, [2] spin angle, [3] row spacing.
+ */
+class Rollers(s0: Float, hw: Float, period: Float, phase: Float) : Hazard(HazType.ROLLERS, s0, hw, period, phase) {
+    val rowA = floatArrayOf(-1.0f, 1.0f)
+    val rollR = 0.34f
+    val rollH = 0.62f
+    private val rowOff = floatArrayOf(0f, -0.22f)
+    override val reach = 1.0f + rollR + RR + 0.05f
+
+    private fun x(t: Float, row: Int) = frac((t + phase) / period + rowOff[row])
+
+    fun closure(t: Float, row: Int): Float {
+        val x = x(t, row)
+        return when {
+            x < 0.5f -> 0f
+            x < 0.6f -> smoothstep(0.5f, 0.6f, x)
+            x < 0.86f -> 1f
+            x < 0.96f -> 1f - smoothstep(0.86f, 0.96f, x)
+            else -> 0f
+        }
+    }
+
+    private fun closing(t: Float, row: Int) = x(t, row) in 0.5f..0.6f
+
+    override fun danger(t: Float, a: Float, d: Float, y: Float, hit: Hit?): Int {
+        if (y > rollH + rollR + 0.05f) return Danger.SAFE
+        for (r in 0..1) {
+            val da = a - rowA[r]
+            if (abs(da) > rollR + RR) continue
+            val c = closure(t, r)
+            if (c < 0.04f) continue
+            val gap = hw * (1f - c)              // open half-width around the centre (roller tips, as drawn)
+            if (abs(d) + RR * 0.9f < gap) continue
+            val away = if (da < 0f) -1f else 1f
+            return if (closing(t, r)) hit?.set(Danger.KNOCK, away * 7f, 0f, 3.5f, 0.6f) ?: Danger.KNOCK
+            else hit?.set(Danger.BLOCK, away * 2.5f, 0f, 0f) ?: Danger.BLOCK
+        }
+        return Danger.SAFE
+    }
+
+    override fun telegraph(t: Float): Float = max(val0(x(t, 0), 0.35f, 0.5f, 0.96f), val0(x(t, 1), 0.35f, 0.5f, 0.96f))
+    override fun state(t: Float, out: FloatArray) { out[0] = closure(t, 0); out[1] = closure(t, 1); out[2] = t * 7f; out[3] = rowA[1] }
+    override fun zones() = listOf(Zone(rowA[0] - 0.5f, rowA[0] + 0.5f, -hw, hw), Zone(rowA[1] - 0.5f, rowA[1] + 0.5f, -hw, hw))
+    override fun event(tPrev: Float, t: Float) = crossed(tPrev, t, 0.5f)
 }

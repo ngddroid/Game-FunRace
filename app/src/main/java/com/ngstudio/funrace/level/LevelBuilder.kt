@@ -31,6 +31,9 @@ import com.ngstudio.funrace.game.sim.Trapdoor
 import com.ngstudio.funrace.game.sim.Turntable
 import com.ngstudio.funrace.game.sim.Wave
 import com.ngstudio.funrace.game.sim.Bollards
+import com.ngstudio.funrace.game.sim.Hammer
+import com.ngstudio.funrace.game.sim.Rollers
+import com.ngstudio.funrace.game.sim.Spinner
 import kotlin.math.max
 
 /** Everything needed to run (and draw) one race, built from a [LevelSpec]. */
@@ -45,6 +48,36 @@ class RaceSetup(
 )
 
 object LevelBuilder {
+    /** Extra skill for each race's lead rival. */
+    const val ACE_BONUS = 0.1f
+
+    /**
+     * Shortest barrel period that still leaves a way up the ramp without jumping: in each half a
+     * barrel must have rolled off the bottom, and the runner reached the top, before the next one
+     * is released there (uphill running is 0.82x speed), plus a second to react.
+     */
+    fun barrelGap(rampHalf: Float, rollSpeed: Float): Float =
+        2f * rampHalf * (1f / rollSpeed + 1f / (LevelValidator.RUN_SPEED * 0.82f)) + 1f
+
+    /**
+     * Overlapping lazy-river belts on one deck become a single belt covering them all (at the
+     * fastest speed): one belt on screen, one push under your feet.
+     */
+    fun mergeBelts(list: List<Hazard>): List<Hazard> {
+        val belts = list.filterIsInstance<Conveyor>().sortedBy { it.s0 - it.halfLen }
+        if (belts.size < 2) return list
+        val merged = ArrayList<Conveyor>()
+        for (b in belts) {
+            val last = merged.lastOrNull()
+            if (last != null && b.s0 - b.halfLen < last.s0 + last.halfLen + 0.2f) {
+                val lo = last.s0 - last.halfLen
+                val hi = max(last.s0 + last.halfLen, b.s0 + b.halfLen)
+                merged[merged.size - 1] = Conveyor((lo + hi) / 2f, last.hw, (hi - lo) / 2f, max(last.speed, b.speed))
+            } else merged += b
+        }
+        return list.filter { it !is Conveyor } + merged
+    }
+
     fun makeHazard(hs: HazSpec, base: Float, pieceHw: Float): Hazard? {
             val s0 = base + hs.at
             return when (hs.type) {
@@ -63,6 +96,9 @@ object LevelBuilder {
                 HazType.GATES -> Gates(s0, pieceHw, hs.period, hs.phase)
                 HazType.WAVE -> Wave(s0, pieceHw, hs.period, hs.phase, hs.side)
                 HazType.CONVEYOR -> Conveyor(s0, pieceHw, hs.q.takeIf { it > 0f } ?: 3f, hs.p.takeIf { it > 0f } ?: 2f)
+                HazType.SPINNER -> Spinner(s0, pieceHw, if (hs.p != 0f) hs.p else 1.1f, hs.phase, hs.side)
+                HazType.HAMMER -> Hammer(s0, pieceHw, hs.period, hs.phase, hs.p.takeIf { it > 0f } ?: 0.95f)
+                HazType.ROLLERS -> Rollers(s0, pieceHw, hs.period, hs.phase)
                 HazType.BARRELS, HazType.COCONUTS, HazType.RAFT -> null
             }
         }
@@ -89,7 +125,7 @@ object LevelBuilder {
             when (p) {
                 is Piece.Deck -> {
                     cb.segment(SegKind.DECK, p.len, w, p.rails, p.rails)
-                    for (h in p.hazards) makeHazard(h, base, hw)?.let { hazards += it }
+                    hazards += mergeBelts(p.hazards.mapNotNull { makeHazard(it, base, hw) })
                     if (p.coins > 0) coinLine(base + 1f, p.len - 2f, p.coins, if (rng.chance(0.5f)) -0.4f else 0.4f)
                 }
                 is Piece.Turn -> {
@@ -98,7 +134,11 @@ object LevelBuilder {
                 }
                 is Piece.Ramp -> {
                     cb.segment(SegKind.RAMP, p.len, w, p.rails, p.rails, rise = p.rise)
-                    p.barrels?.let { b -> hazards += Barrels(base + p.len / 2f, hw, b.period, b.phase, p.len / 2f - 0.6f, b.p.takeIf { it > 0f } ?: 3.5f) }
+                    p.barrels?.let { b ->
+                        val rampHalf = p.len / 2f - 0.6f
+                        val roll = b.p.takeIf { it > 0f } ?: 3.5f
+                        hazards += Barrels(base + p.len / 2f, hw, max(b.period, barrelGap(rampHalf, roll)), b.phase, rampHalf, roll)
+                    }
                 }
                 is Piece.Jump -> {
                     val seg = cb.segment(if (p.hops > 1) SegKind.TRAMPOLINE else SegKind.JUMP, p.len, w, p0 = p.apex, p1 = p.hops.toFloat())
@@ -177,13 +217,13 @@ object LevelBuilder {
         var ri = 0
         for (i in 0 until n) {
             val isP = i == playerLane
-            val skill = if (isP) 1f else (spec.rivalSkill + rng.soft() * 0.06f).coerceIn(0.2f, 0.97f)
+            // the first rival is the race's "ace": noticeably sharper than the rest of the pack
+            val ace = if (!isP && ri == 0) ACE_BONUS else 0f
+            val skill = if (isP) 1f else (spec.rivalSkill + ace + rng.soft() * 0.05f).coerceIn(0.2f, 0.99f)
             val name = if (isP) "You" else names?.getOrNull(ri) ?: Names.rival(spec.seed, ri)
             racers += Racer(i, isP, lanes[i], name, skill, if (isP) -1 else (rivalLooks?.getOrNull(ri) ?: ri))
             if (!isP) ri++
         }
-        rules.guaranteeWin = spec.guaranteeWin
-        if (spec.guaranteeWin) rules.rivalSpeedCap = 0.88f
         return RaceSim(setup.course, setup.hazards, setup.checkpoints, setup.coins, racers, spec.kind, rules, setup.chaser, setup.storm, spec.seed)
     }
 }

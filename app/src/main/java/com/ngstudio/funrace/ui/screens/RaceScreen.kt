@@ -101,6 +101,7 @@ import com.ngstudio.funrace.ui.components.formatNum
 import com.ngstudio.funrace.ui.components.pressable
 import com.ngstudio.funrace.ui.theme.Palette
 import com.ngstudio.funrace.ui.theme.Type
+import com.ngstudio.funrace.services.GameEvents
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -124,7 +125,7 @@ fun specFor(req: RaceRequest): LevelSpec = when (req.mode) {
 /** Expected expert time for medals: distance at running pace plus a little per hazard. */
 fun parTime(spec: LevelSpec): Float {
     val setup = LevelBuilder.build(spec)
-    return (setup.course.finishS - setup.course.startS) / 4.6f + spec.hazardCount * 0.7f
+    return (setup.course.finishS - setup.course.startS) / (4.6f * RaceRules.PLAYER_EDGE) + spec.hazardCount * 0.7f
 }
 
 @Composable
@@ -155,10 +156,12 @@ fun RaceScreen(req: RaceRequest) {
             RaceMod.BIG_HEADS -> rules.bigHeads = true
             RaceMod.MIRROR -> rules.mirror = true
         }
-        val rivals = Catalog.rivalPool
+        // bots race as the kid racers: a different kid each, never the one you're wearing
+        val rivals = Catalog.rivalPool.filter { it.id != d.profile.character }
+        val seedIdx = built.first.seed.toInt().let { if (it < 0) -it else it }
         val rivalLooks = (0 until 6).map { i ->
-            val ch = rivals[(built.first.seed.toInt().let { if (it < 0) -it else it } + i * 7) % rivals.size]
-            val hat = if (i % 2 == 0) Catalog.hats[(i * 5 + built.first.level) % Catalog.hats.size] else null
+            val ch = rivals[(seedIdx + i * 5) % rivals.size]
+            val hat = if ((seedIdx + i) % 3 == 0) Catalog.rivalHats[(i + built.first.level) % Catalog.rivalHats.size] else null
             Look.of(ch, hat)
         }
         val boosters = req.boosters
@@ -171,10 +174,13 @@ fun RaceScreen(req: RaceRequest) {
         ) { r ->
             scope.launch {
                 val payout = Progression.applyRace(c.save, r, timeTrialPar = par, dailyChallenge = req.mode == PlayMode.DAILY)
+                GameEvents.raceEnd(r.level, req.mode.name.lowercase(), r.kind.name.lowercase(), r.finished, payout.cleared, r.rank, r.timeMs, payout.stars, payout.coins, r.bonks, r.splashes)
+                c.save.data.let { GameEvents.progress(it.progress.highestUnlocked, it.profile.character) }
                 result = r to payout
             }
         }
         controller = ctrl
+        GameEvents.raceStart(built.first.level, req.mode.name.lowercase(), built.first.kind.name.lowercase(), built.first.world.name.lowercase(), boosters)
         c.stage.showRace(ctrl)
         val m = when (built.first.kind) {
             RaceKind.BOSS_TIDE, RaceKind.BOSS_DUCK, RaceKind.BOSS_STORM -> Music.BOSS
@@ -577,7 +583,7 @@ private fun ResultScreen(r: RaceResult, payout: Payout, req: RaceRequest, spec: 
                 GameButton("", { nav.replaceAll(Screen.Main); nav.tab = Tab.HOME }, Modifier.width(72.dp), colors = Buttons.Ocean, icon = R.drawable.ui_home)
                 GameButton(if (req.mode == PlayMode.CAMPAIGN && payout.cleared) "" else "Retry", { nav.startRace(req.copy(boosters = emptySet())) }, if (req.mode == PlayMode.CAMPAIGN && payout.cleared) Modifier.width(72.dp) else Modifier.weight(1f), colors = Buttons.Sun, icon = R.drawable.ui_restart)
                 if (req.mode == PlayMode.CAMPAIGN && payout.cleared && r.level < LevelRepository.MAX_LEVEL) {
-                    GameButton("Next", { nav.startRace(RaceRequest(r.level + 1)) }, Modifier.weight(1.3f), colors = Buttons.Green, trailingIcon = R.drawable.ui_play, shine = true)
+                    GameButton("Next", { nav.startRace(RaceRequest(r.level + 1)) }, Modifier.weight(1.3f), colors = Buttons.Green, trailingIcon = R.drawable.ui_play)
                 }
             }
         }

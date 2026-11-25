@@ -46,7 +46,7 @@ object DifficultyCurve {
         val railFrac = lerp(0.7f, 0.15f, d)
         val checkpointEvery = if (d < 0.3f) 1 else if (d < 0.7f) 2 else 3
         val rivals = if (d < 0.3f) 3 else if (d < 0.65f) 4 else 5
-        val rivalSkill = lerp(0.42f, 0.82f, d)
+        val rivalSkill = lerp(0.64f, 0.9f, d)
     }
 }
 
@@ -61,6 +61,8 @@ object LevelGenerator {
         HazType.PRESS to 12, HazType.TRAPDOOR to 15, HazType.PADDLE to 18, HazType.CANNON to 22, HazType.TILT to 26,
         HazType.FAN to 30, HazType.BOLLARDS to 34, HazType.GATES to 38, HazType.WAVE to 45, HazType.CONVEYOR to 60,
         HazType.BARRELS to 65,
+        // introduced in the handcrafted levels (2, 4 and 6), so they join the pool from level 11
+        HazType.HAMMER to 2, HazType.SPINNER to 4, HazType.ROLLERS to 6,
     )
     private const val COMBOS_FROM = 40
     private const val TRIPLES_FROM = 150
@@ -69,6 +71,7 @@ object LevelGenerator {
         HazType.PUSHER -> 3.0f; HazType.PENDULUM -> 3.2f; HazType.GLOVES -> 2.8f; HazType.PRESS -> 3.0f
         HazType.TRAPDOOR -> 3.2f; HazType.CANNON -> 2.8f; HazType.TILT -> 4.0f; HazType.FAN -> 3.2f
         HazType.BOLLARDS -> 3.0f; HazType.GATES -> 3.4f; HazType.WAVE -> 3.4f; HazType.BARRELS -> 3.2f
+        HazType.HAMMER -> 3.6f; HazType.ROLLERS -> 3.0f
         else -> 3f
     }
 
@@ -77,7 +80,9 @@ object LevelGenerator {
         HazType.PUSHER -> 0.95f; HazType.PENDULUM -> 1.05f; HazType.SWEEPER -> hw + 0.85f; HazType.TURNTABLE -> hw + 1.0f
         HazType.GLOVES -> 0.8f; HazType.PRESS -> 1.15f; HazType.TRAPDOOR -> 1.8f; HazType.PADDLE -> 1.9f
         HazType.CANNON -> 1.0f; HazType.TILT -> 2.5f; HazType.FAN -> 1.5f; HazType.BOLLARDS -> 1.55f
-        HazType.GATES -> 0.5f; HazType.WAVE -> 1.9f; else -> 1.2f
+        HazType.GATES -> 0.5f; HazType.WAVE -> 1.9f
+        HazType.SPINNER -> 2f * hw + 1.5f; HazType.HAMMER -> 1.2f; HazType.ROLLERS -> 1.75f
+        else -> 1.2f
     }
 
     fun kindFor(n: Int): RaceKind = when {
@@ -134,6 +139,8 @@ object LevelGenerator {
                 HazType.CANNON -> HazSpec(t, at, period, phase, side, lerp(5.5f, 7.5f, d))
                 HazType.FAN -> HazSpec(t, at, period, phase, side, lerp(3.4f, 4.4f, d))
                 HazType.TRAPDOOR -> HazSpec(t, at, period, phase, side, 0f, if (rng.chance(0.5f)) 1f else 0f)
+                HazType.SPINNER -> HazSpec(t, at, period, phase, side, 2.3f * speedMult * side * rng.range(0.92f, 1.08f))
+                HazType.HAMMER -> HazSpec(t, at, period, phase, side, rng.range(0.88f, 0.98f))
                 else -> HazSpec(t, at, period, phase, side)
             }
         }
@@ -160,7 +167,9 @@ object LevelGenerator {
                 speed *= 0.9f
                 specs = withExtra(types.mapIndexed { i, t -> hazSpec(t, positions[i], speed) })
             }
-            return Piece.Deck(len, specs, rails = rails(), coins = if (rng.chance(0.3f)) 3 else 0)
+            // bars and rollers sweep in over the deck edge, so those decks never get rails
+            val edgeSweep = types.any { it == HazType.SPINNER || it == HazType.ROLLERS }
+            return Piece.Deck(len, specs, rails = !edgeSweep && rails(), coins = if (rng.chance(0.3f)) 3 else 0)
         }
 
         fun setPiece(): List<Piece> {
@@ -302,7 +311,7 @@ object LevelGenerator {
         return LevelSpec(
             level = n, seed = seed, name = if (kind == RaceKind.BONUS) "Coin Rush" else Names.level(n, world), world = world, time = time,
             kind = kind, width = width, startY = startY, pieces = pieces, rivals = rivals, rivalSkill = m.rivalSkill,
-            difficulty = d, guaranteeWin = false, chaserSpeed = chaserSpeed, chaserDelay = 6f,
+            difficulty = d, chaserSpeed = chaserSpeed, chaserDelay = 6f,
             stormStrength = if (kind == RaceKind.BOSS_STORM) lerp(1.4f, 2.2f, d) else 0f,
             intro = intro, newThing = newThing,
         )
