@@ -99,7 +99,10 @@ def mask(im, shape):
 
 def main():
     subj = subject(os.path.join(SRC, "icon_fg.png"))
-    dens = {"mdpi": 1, "hdpi": 1.5, "xhdpi": 2, "xxhdpi": 3, "xxxhdpi": 4}
+    # the launcher and Play icons now come from store/app_icon_source.png (tools/make_app_icon.py);
+    # with that file present, only the splash icon and the feature graphic are made here
+    app_icon = os.path.exists(os.path.join(ROOT, "store", "app_icon_source.png"))
+    dens = {} if app_icon else {"mdpi": 1, "hdpi": 1.5, "xhdpi": 2, "xxhdpi": 3, "xxxhdpi": 4}
     for name, k in dens.items():
         d = os.path.join(RES, "mipmap-" + name)
         os.makedirs(d, exist_ok=True)
@@ -120,11 +123,12 @@ def main():
         mask(full, "rounded").save(os.path.join(d, "ic_launcher.png"))
         mask(full, "circle").save(os.path.join(d, "ic_launcher_round.png"))
     anydpi = os.path.join(RES, "mipmap-anydpi-v26")
-    os.makedirs(anydpi, exist_ok=True)
+    if not app_icon:
+        os.makedirs(anydpi, exist_ok=True)
     xml = ('<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
            '    <background android:drawable="@mipmap/ic_launcher_background" />\n    <foreground android:drawable="@mipmap/ic_launcher_foreground" />\n'
            '    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />\n</adaptive-icon>\n')
-    for n in ("ic_launcher.xml", "ic_launcher_round.xml"):
+    for n in (() if app_icon else ("ic_launcher.xml", "ic_launcher_round.xml")):
         open(os.path.join(anydpi, n), "w").write(xml)
     for stale in ("drawable/ic_launcher_background.xml", "drawable/ic_launcher_foreground.xml"):
         p = os.path.join(RES, stale)
@@ -138,10 +142,12 @@ def main():
         place(432, subj, 0.6, 0.02).save(os.path.join(RES, "drawable-nodpi", "splash_icon.png"))
     # Play icon 512 (full bleed; Play rounds it)
     os.makedirs(STORE, exist_ok=True)
-    p = background(512)
-    p.alpha_composite(place(512, subj, 0.86, 0.02))
-    p.convert("RGB").save(os.path.join(STORE, "play_icon_512.png"))
-    feature_graphic()
+    if not app_icon:
+        p = background(512)
+        p.alpha_composite(place(512, subj, 0.86, 0.02))
+        p.convert("RGB").save(os.path.join(STORE, "play_icon_512.png"))
+    if not app_icon:
+        feature_graphic()  # otherwise tools/make_app_icon.py makes it from the icon art
     print("icons written")
 
 

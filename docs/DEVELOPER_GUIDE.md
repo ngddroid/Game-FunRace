@@ -66,7 +66,8 @@ $B -b --factory-startup --python tools/blender/build_assets.py -- kids          
 $B -b --factory-startup --python tools/blender/preview_avatars.py -- /tmp/avatars.png spec.json   # coloured avatar sheet
 $B -b --factory-startup --python tools/blender/preview_dmesh.py -- /tmp/sheet.png dashling duck   # contact sheet
 $B -b --factory-startup --python tools/blender/render_icon.py -- /tmp/art all  # icon + hero renders
-python3 tools/make_icons.py /tmp/art                                            # launcher icons, splash, store art
+python3 tools/make_icons.py /tmp/art                                            # splash icon (launcher icons and feature graphic only without store/app_icon_source.png)
+python3 tools/make_app_icon.py [art.png]                                        # app icon: launcher (adaptive + legacy), Play icon 512, feature graphic, website logo, from store/app_icon_source.png
 $B -b --factory-startup --python tools/blender/preview_avatars.py -- /tmp/art/splash_avatar.png tools/blender/splash_avatar.json portrait
 python3 tools/make_icons.py --splash /tmp/art/splash_avatar.png                 # Kai hopping (8 frames + splash_icon_anim.xml); no longer on the launch screen, kept in tools/blender/splash_hop/
 python3 tools/gen_ui_art.py                                                     # 60 UI icons
@@ -106,5 +107,5 @@ Settings → **Usage & crash reports** turns both off (`Settings.shareData`).
 - Play Console: content rating (cartoon slapstick, no violence), target audience 13+ recommended until you add Families-certified ads.
 - Play Console **Data safety**: collected and shared with Google as a processor: *App activity* (app interactions, in-game actions), *App info and performance* (crash logs, diagnostics), *Device or other IDs* (Firebase app-instance ID, FCM token). Purpose: analytics, app functionality. Not used for ads. Encrypted in transit. Users can turn it off in Settings. The advertising ID is **not** collected (answer "No" to the advertising ID question).
 - Bump `versionCode` for every upload; in-app updates compare it.
-- Store art: `store/play_icon_512.png`, `store/feature_graphic_1024x500.png`.
+- Store art: `store/play_icon_512.png` and `store/feature_graphic_1024x500.png`, both made from `store/app_icon_source.png` by `tools/make_app_icon.py`.
 - Run the full level validation and `./gradlew :app:assembleRelease`.
